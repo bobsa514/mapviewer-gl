@@ -2,12 +2,12 @@ import React, { useState, useCallback } from 'react';
 import DeckGL from '@deck.gl/react';
 import { GeoJsonLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { Map } from 'react-map-gl';
-import type { ViewState } from '@deck.gl/core';
+import type { MapViewState, ViewStateChangeParameters } from '@deck.gl/core';
 import type { FeatureCollection, Feature, Geometry } from 'geojson';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 // Initial viewport state (USA view)
-const INITIAL_VIEW_STATE: ViewState = {
+const INITIAL_VIEW_STATE: MapViewState = {
   latitude: 39.8283,
   longitude: -98.5795,
   zoom: 3,
@@ -31,7 +31,7 @@ interface LayerInfo {
 
 const GeospatialViewer: React.FC = () => {
   const [layers, setLayers] = useState<LayerInfo[]>([]);
-  const [viewState, setViewState] = useState<ViewState>(INITIAL_VIEW_STATE);
+  const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
   const [hoveredFeature, setHoveredFeature] = useState<Feature | null>(null);
   const [activeColorPicker, setActiveColorPicker] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -383,24 +383,6 @@ const GeospatialViewer: React.FC = () => {
     return [r, g, b];
   };
 
-  const toggleColorPicker = (layerId: number) => {
-    setActiveColorPicker(activeColorPicker === layerId ? null : layerId);
-  };
-
-  // Add click outside handler
-  React.useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (activeColorPicker !== null) {
-        setActiveColorPicker(null);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [activeColorPicker]);
-
   const toggleLayerExpanded = (layerId: number) => {
     setLayers(layers.map(layer => 
       layer.id === layerId ? { ...layer, isExpanded: !layer.isExpanded } : layer
@@ -426,79 +408,68 @@ const GeospatialViewer: React.FC = () => {
         const [r, g, b] = hexToRGB(layer.color);
         
         if (layer.type === 'csv') {
-          return (
-            <ScatterplotLayer
-              key={layer.id}
-              id={`csv-layer-${layer.id}`}
-              data={layer.data}
-              getPosition={d => d.position}
-              getFillColor={[r, g, b, Math.round(layer.opacity * 255)]}
-              getRadius={d => {
-                if (selectedFeature && 
-                    selectedFeature.geometry.type === 'Point' &&
-                    JSON.stringify(d.position) === JSON.stringify(selectedFeature.geometry.coordinates)) {
-                  return (layer.pointSize || 5) * 2;
-                }
-                return layer.pointSize || 5;
-              }}
-              radiusScale={1}
-              radiusUnits="pixels"
-              radiusMinPixels={1}
-              radiusMaxPixels={20}
-              pickable={true}
-              updateTriggers={{
-                getRadius: [selectedFeature, layer.pointSize]
-              }}
-              onClick={info => {
-                if (info.object) {
-                  const feature = {
-                    type: 'Feature',
-                    geometry: {
-                      type: 'Point',
-                      coordinates: info.object.position
-                    },
-                    properties: info.object.properties
-                  } as Feature;
-                  setSelectedFeature(feature);
-                  setShowAllProperties(false);
-                }
-              }}
-            />
-          );
+          return new ScatterplotLayer({
+            key: layer.id,
+            id: `csv-layer-${layer.id}`,
+            data: layer.data,
+            getPosition: (d: any) => d.position,
+            getFillColor: [r, g, b, Math.round(layer.opacity * 255)],
+            getRadius: (d: any) => {
+              if (selectedFeature && 
+                  selectedFeature.geometry.type === 'Point' &&
+                  JSON.stringify(d.position) === JSON.stringify(selectedFeature.geometry.coordinates)) {
+                return (layer.pointSize || 5) * 2;
+              }
+              return layer.pointSize || 5;
+            },
+            radiusScale: 1,
+            radiusUnits: "pixels",
+            radiusMinPixels: 1,
+            radiusMaxPixels: 20,
+            pickable: true,
+            updateTriggers: {
+              getRadius: [selectedFeature, layer.pointSize]
+            },
+            onClick: (info: any) => {
+              if (info.object) {
+                const feature = {
+                  type: 'Feature',
+                  geometry: {
+                    type: 'Point',
+                    coordinates: info.object.position
+                  },
+                  properties: info.object.properties
+                } as Feature;
+                setSelectedFeature(feature);
+              }
+            }
+          });
         }
 
-        return (
-          <GeoJsonLayer
-            key={layer.id}
-            id={`geojson-layer-${layer.id}`}
-            data={layer.data}
-            filled={true}
-            stroked={true}
-            lineWidthUnits="pixels"
-            lineWidthMinPixels={d => {
-              if (selectedFeature && areFeaturesEqual(d, selectedFeature)) {
-                return 3;
-              }
-              return 1;
-            }}
-            getFillColor={d => {
-              if (selectedFeature && areFeaturesEqual(d, selectedFeature)) {
-                return [r, g, b, Math.round(layer.opacity * 255)]; // Full opacity for selected
-              }
-              return [r, g, b, Math.round(layer.opacity * 128)]; // More transparent for non-selected
-            }}
-            getLineColor={[r, g, b, 255]} // Always show borders with full opacity
-            pickable={true}
-            updateTriggers={{
-              getFillColor: [layer.color, layer.opacity, selectedFeature],
-              lineWidthMinPixels: [selectedFeature]
-            }}
-            onClick={info => {
-              setSelectedFeature(info.object as Feature);
-              setShowAllProperties(false);
-            }}
-          />
-        );
+        return new GeoJsonLayer({
+          key: layer.id,
+          id: `geojson-layer-${layer.id}`,
+          data: layer.data,
+          filled: true,
+          stroked: true,
+          lineWidthUnits: "pixels",
+          lineWidthMinPixels: 1,
+          getFillColor: (d: Feature) => {
+            if (selectedFeature && areFeaturesEqual(d, selectedFeature)) {
+              return [r, g, b, Math.round(layer.opacity * 255)]; // Full opacity for selected
+            }
+            return [r, g, b, Math.round(layer.opacity * 128)]; // More transparent for non-selected
+          },
+          getLineColor: [r, g, b, 255], // Always show borders with full opacity
+          pickable: true,
+          updateTriggers: {
+            getFillColor: [layer.color, layer.opacity, selectedFeature],
+            lineWidthMinPixels: [selectedFeature]
+          },
+          onClick: (info: any) => {
+            setSelectedFeature(info.object as Feature);
+          }
+        });
       });
   };
 
@@ -713,16 +684,20 @@ const GeospatialViewer: React.FC = () => {
         </div>
       </div>
       <DeckGL
-        className="w-full h-full"
+        style={{ width: '100%', height: '100%' }}
         viewState={viewState}
-        onViewStateChange={({ viewState }: { viewState: ViewState }) => setViewState(viewState)}
+        onViewStateChange={({ viewState }) => {
+          if ('latitude' in viewState && 'longitude' in viewState && 'zoom' in viewState) {
+            setViewState(viewState as MapViewState);
+          }
+        }}
         controller={true}
+        layers={renderLayers()}
       >
         <Map
           mapStyle={mapStyle}
           mapboxAccessToken={import.meta.env.VITE_MAPBOX_TOKEN}
         />
-        {renderLayers()}
         <div className="absolute bottom-16 right-4 z-10">
           <div className="relative">
             <button
