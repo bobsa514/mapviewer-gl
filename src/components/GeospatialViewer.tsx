@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import DeckGL from '@deck.gl/react';
 import { GeoJsonLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { Map } from 'react-map-gl';
@@ -40,12 +40,26 @@ interface LayerInfo {
   isExpanded?: boolean; // Add expanded state for symbology controls
 }
 
+interface CSVPreviewData {
+  headers: string[];
+  rows: string[][];
+  selectedColumns: Set<string>;
+  coordinateColumns: Set<string>;
+}
+
+interface GeoJSONPreviewData {
+  properties: string[];
+  features: Feature[];
+  selectedProperties: Set<string>;
+}
+
 const GeospatialViewer: React.FC = () => {
   const [layers, setLayers] = useState<LayerInfo[]>([]);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
   const [hoveredFeature, setHoveredFeature] = useState<Feature | null>(null);
   const [activeColorPicker, setActiveColorPicker] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const [showAllProperties, setShowAllProperties] = useState(false);
   const [selectedFeature, setSelectedFeature] = useState<Feature | null>(null);
   const [showColumnSelector, setShowColumnSelector] = useState(false);
@@ -58,6 +72,9 @@ const GeospatialViewer: React.FC = () => {
   const [showFilterModal, setShowFilterModal] = useState<number | null>(null);
   const [activeFilters, setActiveFilters] = useState<{[layerId: number]: { fn: (item: any) => boolean, info: FilterInfo }[]}>({});
   const [showLayers, setShowLayers] = useState(true);
+  const [csvPreview, setCsvPreview] = useState<CSVPreviewData | null>(null);
+  const [geoJSONPreview, setGeoJSONPreview] = useState<GeoJSONPreviewData | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const basemapOptions = {
     "Light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
@@ -129,27 +146,33 @@ const GeospatialViewer: React.FC = () => {
   }, [extractCoordinates]);
 
   const detectCoordinateColumns = (headers: string[]): { lat: string; lng: string } | null => {
+    // Exact matches for coordinate column names (case-insensitive)
     const possibleLatColumns = ['latitude', 'lat', 'y'];
     const possibleLngColumns = ['longitude', 'lng', 'long', 'lon', 'x'];
 
-    // Convert headers to lowercase for case-insensitive matching
-    const headersLower = headers.map(h => h.toLowerCase().trim());
-
-    // Try exact matches first
-    const latColumn = headers.find(h => 
-      possibleLatColumns.map(col => col.toLowerCase()).includes(h.toLowerCase().trim())
-    );
-    const lngColumn = headers.find(h => 
-      possibleLngColumns.map(col => col.toLowerCase()).includes(h.toLowerCase().trim())
+    // Find the first matching latitude column (case-insensitive)
+    let latColumn = headers.find(h => 
+      possibleLatColumns.some(term => h.toLowerCase().trim() === term.toLowerCase())
     );
 
-    console.log('Found columns:', { 
-      latColumn, 
-      lngColumn, 
-      headersLower,
-      possibleLatColumns,
-      possibleLngColumns
-    });
+    // Find the first matching longitude column (case-insensitive)
+    let lngColumn = headers.find(h => 
+      possibleLngColumns.some(term => h.toLowerCase().trim() === term.toLowerCase())
+    );
+
+    // If no exact matches, try looking for columns that start with these terms
+    if (!latColumn || !lngColumn) {
+      latColumn = headers.find(h => 
+        possibleLatColumns.some(term => 
+          h.toLowerCase().trim().startsWith(term.toLowerCase() + '_')
+        )
+      );
+      lngColumn = headers.find(h => 
+        possibleLngColumns.some(term => 
+          h.toLowerCase().trim().startsWith(term.toLowerCase() + '_')
+        )
+      );
+    }
 
     if (latColumn && lngColumn) {
       return { lat: latColumn, lng: lngColumn };
@@ -157,18 +180,75 @@ const GeospatialViewer: React.FC = () => {
     return null;
   };
 
-  const handleCSVUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const processChunk = useCallback((
+    lines: string[],
+    startIndex: number,
+    headers: string[],
+    headerIndices: number[],
+    columns: { lat: string; lng: string },
+    latIndex: number,
+    lngIndex: number,
+    chunkSize: number,
+    onProgress: (progress: number) => void
+  ) => {
+    const data = [];
+    let validPoints = 0;
+    let invalidPoints = 0;
+    const endIndex = Math.min(startIndex + chunkSize, lines.length);
+
+    for (let i = startIndex; i < endIndex; i++) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+
+      const values = line.split(',').map(v => v.trim());
+      
+      // Parse coordinates
+      const lat = parseFloat(values[latIndex]);
+      const lng = parseFloat(values[lngIndex]);
+      
+      // Validate coordinates
+      if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        invalidPoints++;
+        continue;
+      }
+
+      // Only include selected columns
+      const properties = {
+        [columns.lat]: lat,
+        [columns.lng]: lng,
+        ...Object.fromEntries(
+          headers
+            .map((h, idx) => [h, values[headerIndices[idx]]])
+            .filter(([key]) => 
+              key.toLowerCase() !== columns.lat.toLowerCase() && 
+              key.toLowerCase() !== columns.lng.toLowerCase()
+            )
+        )
+      };
+
+      data.push({
+        position: [lng, lat],
+        properties
+      });
+
+      validPoints++;
+    }
+
+    const totalDataRows = lines.length - 1;
+    const progress = ((endIndex - 1) / totalDataRows) * 100;
+    onProgress(Math.min(progress, 100));
+
+    return { data, validPoints, invalidPoints, endIndex };
+  }, []);
+
+  const handleCSVPreview = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    setIsLoading(true);
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const csvText = e.target?.result as string;
-        console.log('Processing CSV file:', file.name);
-
-        // Split by newlines and remove empty lines and trim whitespace
         const lines = csvText
           .split(/\r?\n/)
           .map(line => line.trim())
@@ -179,105 +259,208 @@ const GeospatialViewer: React.FC = () => {
         }
 
         // Parse headers and clean them
-        const headers = lines[0]
-          .split(',')
-          .map(h => h.trim());
+        const headers = lines[0].split(',').map(h => h.trim());
+        
+        // Parse data rows more carefully
+        const previewRows = lines.slice(1, 11).map(line => {
+          const row = new Array(headers.length).fill(''); // Initialize with empty strings
+          let currentCell = '';
+          let inQuotes = false;
+          let cellIndex = 0;
+          
+          // Parse the line character by character
+          for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            
+            if (char === '"') {
+              inQuotes = !inQuotes;
+            } else if (char === ',' && !inQuotes) {
+              // End of cell
+              if (cellIndex < headers.length) {
+                row[cellIndex] = currentCell.trim();
+              }
+              currentCell = '';
+              cellIndex++;
+            } else {
+              currentCell += char;
+            }
+          }
+          
+          // Add the last cell
+          if (cellIndex < headers.length) {
+            row[cellIndex] = currentCell.trim();
+          }
+          
+          return row;
+        });
 
-        console.log('Number of columns:', headers.length);
+        // Identify coordinate columns using the updated detection logic
+        const coordinates = detectCoordinateColumns(headers);
+        const coordinateColumns = new Set<string>();
+        if (coordinates) {
+          coordinateColumns.add(coordinates.lat);
+          coordinateColumns.add(coordinates.lng);
+        }
 
-        const columns = detectCoordinateColumns(headers);
+        // By default, select all columns
+        const defaultSelected = new Set(headers);
+
+        setCsvPreview({
+          headers,
+          rows: previewRows,
+          selectedColumns: defaultSelected,
+          coordinateColumns
+        });
+      } catch (error) {
+        console.error('Error parsing CSV:', error);
+        alert(error instanceof Error ? error.message : 'Error parsing CSV file');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const toggleColumnSelection = (header: string) => {
+    if (!csvPreview) return;
+    
+    // Don't allow toggling coordinate columns
+    if (csvPreview.coordinateColumns.has(header)) return;
+    
+    const newSelected = new Set(csvPreview.selectedColumns);
+    if (newSelected.has(header)) {
+      newSelected.delete(header);
+    } else {
+      newSelected.add(header);
+    }
+    
+    setCsvPreview({
+      ...csvPreview,
+      selectedColumns: newSelected
+    });
+  };
+
+  const handleSelectAllColumns = () => {
+    if (!csvPreview) return;
+    setCsvPreview({
+      ...csvPreview,
+      selectedColumns: new Set(csvPreview.headers)
+    });
+  };
+
+  const handleDeselectAllColumns = () => {
+    if (!csvPreview) return;
+    // Keep only coordinate columns selected
+    setCsvPreview({
+      ...csvPreview,
+      selectedColumns: new Set(csvPreview.coordinateColumns)
+    });
+  };
+
+  const proceedWithSelectedColumns = () => {
+    if (!fileInputRef.current?.files?.[0] || !csvPreview) return;
+    
+    // Store selected columns for filtering during processing
+    const selectedColumns = Array.from(csvPreview.selectedColumns);
+    const file = fileInputRef.current.files[0];
+    
+    // Reset preview
+    setCsvPreview(null);
+    
+    // Process the file with selected columns
+    handleCSVUpload(file, selectedColumns);
+  };
+
+  const handleCSVUpload = (file: File, selectedColumns?: string[]) => {
+    setIsLoading(true);
+    setLoadingProgress(0);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const csvText = e.target?.result as string;
+        console.log('Processing CSV file:', file.name, 'Size:', (file.size / 1024 / 1024).toFixed(2), 'MB');
+
+        const lines = csvText
+          .split(/\r?\n/)
+          .map(line => line.trim())
+          .filter(line => line.length > 0);
+
+        if (lines.length < 2) {
+          throw new Error('CSV file is empty or has no data rows');
+        }
+
+        const headers = lines[0].split(',').map(h => h.trim());
+        
+        // If we have selected columns, filter the headers and data
+        const processedHeaders = selectedColumns || headers;
+        const headerIndices = processedHeaders.map(h => headers.indexOf(h));
+
+        const columns = detectCoordinateColumns(processedHeaders);
         if (!columns) {
           throw new Error('Could not detect latitude and longitude columns');
         }
 
+        const latIndex = headerIndices[processedHeaders.indexOf(columns.lat)];
+        const lngIndex = headerIndices[processedHeaders.indexOf(columns.lng)];
+
         // Find column indices
-        const latIndex = headers.indexOf(columns.lat);
-        const lngIndex = headers.indexOf(columns.lng);
+        const CHUNK_SIZE = 10000;
+        let currentIndex = 1;
+        let allData: any[] = [];
+        let totalValidPoints = 0;
+        let totalInvalidPoints = 0;
+        let bounds = {
+          minLat: Infinity,
+          maxLat: -Infinity,
+          minLng: Infinity,
+          maxLng: -Infinity
+        };
 
-        // Process data in chunks to avoid memory issues
-        const CHUNK_SIZE = 1000;
-        const data = [];
-        let validPoints = 0;
-        let invalidPoints = 0;
-        let invalidRows: { row: number; lat: number; lng: number }[] = [];
+        while (currentIndex < lines.length) {
+          const { 
+            data: chunkData, 
+            validPoints, 
+            invalidPoints, 
+            endIndex 
+          } = processChunk(
+            lines, 
+            currentIndex, 
+            processedHeaders,
+            headerIndices,
+            columns, 
+            latIndex, 
+            lngIndex, 
+            CHUNK_SIZE,
+            setLoadingProgress
+          );
 
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i];
-          const values = line.split(',').map(v => v.trim());
-          
-          // Parse coordinates
-          const lat = parseFloat(values[latIndex]);
-          const lng = parseFloat(values[lngIndex]);
-          
-          // Validate coordinates
-          if (isNaN(lat) || isNaN(lng)) {
-            invalidPoints++;
-            continue;
-          }
+          // Update statistics
+          totalValidPoints += validPoints;
+          totalInvalidPoints += invalidPoints;
 
-          // Check if coordinates are within valid ranges
-          if (lat < -90 || lat > 90) {
-            invalidPoints++;
-            invalidRows.push({ row: i + 1, lat, lng });
-            continue;
-          }
-
-          if (lng < -180 || lng > 180) {
-            invalidPoints++;
-            invalidRows.push({ row: i + 1, lat, lng });
-            continue;
-          }
-
-          // Only include essential properties to reduce memory usage
-          const properties = {
-            // Include coordinate columns
-            [columns.lat]: lat,
-            [columns.lng]: lng,
-            // Include all other columns
-            ...Object.fromEntries(
-              headers
-                .map((h, idx) => [h, values[idx]])
-                .filter(([key]) => 
-                  // Only exclude coordinate columns
-                  key.toLowerCase() !== columns.lat.toLowerCase() && 
-                  key.toLowerCase() !== columns.lng.toLowerCase()
-                )
-            )
-          };
-
-          data.push({
-            position: [lng, lat],
-            properties
+          // Update bounds
+          chunkData.forEach(point => {
+            bounds.minLat = Math.min(bounds.minLat, point.position[1]);
+            bounds.maxLat = Math.max(bounds.maxLat, point.position[1]);
+            bounds.minLng = Math.min(bounds.minLng, point.position[0]);
+            bounds.maxLng = Math.max(bounds.maxLng, point.position[0]);
           });
 
-          validPoints++;
+          // Append chunk data
+          allData = allData.concat(chunkData);
+          currentIndex = endIndex;
 
-          // Log progress for large files
-          if (i % CHUNK_SIZE === 0) {
-            console.log(`Processed ${i} rows...`);
-          }
+          // Allow UI to update by yielding to the event loop
+          await new Promise(resolve => setTimeout(resolve, 0));
         }
 
         console.log('CSV processing complete:', {
           totalRows: lines.length - 1,
-          validPoints,
-          invalidPoints,
-          invalidRows: invalidRows.length > 0 ? invalidRows : undefined
+          validPoints: totalValidPoints,
+          invalidPoints: totalInvalidPoints
         });
 
-        if (data.length === 0) {
+        if (allData.length === 0) {
           throw new Error('No valid data points found in CSV');
         }
-
-        // Calculate bounds only from valid points
-        const bounds = {
-          minLat: Math.min(...data.map(d => d.position[1])),
-          maxLat: Math.max(...data.map(d => d.position[1])),
-          minLng: Math.min(...data.map(d => d.position[0])),
-          maxLng: Math.max(...data.map(d => d.position[0])),
-        };
-
-        console.log('Data bounds:', bounds);
 
         const centerLat = (bounds.minLat + bounds.maxLat) / 2;
         const centerLng = (bounds.minLng + bounds.maxLng) / 2;
@@ -291,7 +474,7 @@ const GeospatialViewer: React.FC = () => {
           id: layers.length,
           name: file.name,
           visible: true,
-          data,
+          data: allData,
           color: '#ff0000',
           opacity: 0.7,
           type: 'csv',
@@ -310,6 +493,7 @@ const GeospatialViewer: React.FC = () => {
         alert(error instanceof Error ? error.message : 'Error parsing CSV file');
       } finally {
         setIsLoading(false);
+        setLoadingProgress(0);
       }
     };
     reader.readAsText(file);
@@ -319,15 +503,101 @@ const GeospatialViewer: React.FC = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    // Store the file in the ref for later use
+    if (fileInputRef.current) {
+      fileInputRef.current.files = event.target.files;
+    }
+
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const geojson = JSON.parse(e.target?.result as string) as FeatureCollection;
+        
+        // Get all unique property names from features
+        const properties = new Set<string>();
+        geojson.features.forEach(feature => {
+          if (feature.properties) {
+            Object.keys(feature.properties).forEach(key => properties.add(key));
+          }
+        });
+
+        // Show preview with first 10 features
+        setGeoJSONPreview({
+          properties: Array.from(properties),
+          features: geojson.features.slice(0, 10),
+          selectedProperties: new Set(properties)
+        });
+
+      } catch (error) {
+        console.error('Error parsing GeoJSON:', error);
+        alert(error instanceof Error ? error.message : 'Error parsing GeoJSON file');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleSelectAllGeoJSONProperties = () => {
+    if (!geoJSONPreview) return;
+    setGeoJSONPreview({
+      ...geoJSONPreview,
+      selectedProperties: new Set(geoJSONPreview.properties)
+    });
+  };
+
+  const handleDeselectAllGeoJSONProperties = () => {
+    if (!geoJSONPreview) return;
+    setGeoJSONPreview({
+      ...geoJSONPreview,
+      selectedProperties: new Set()
+    });
+  };
+
+  const toggleGeoJSONPropertySelection = (property: string) => {
+    if (!geoJSONPreview) return;
+    
+    const newSelected = new Set(geoJSONPreview.selectedProperties);
+    if (newSelected.has(property)) {
+      newSelected.delete(property);
+    } else {
+      newSelected.add(property);
+    }
+    
+    setGeoJSONPreview({
+      ...geoJSONPreview,
+      selectedProperties: newSelected
+    });
+  };
+
+  const proceedWithSelectedGeoJSONProperties = () => {
+    if (!fileInputRef.current?.files?.[0] || !geoJSONPreview) return;
+    
+    const file = fileInputRef.current.files[0];
+    setIsLoading(true);
+    setLoadingProgress(0);
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const geojson = JSON.parse(e.target?.result as string) as FeatureCollection;
+        
+        // Filter properties in each feature
+        const filteredGeojson: FeatureCollection = {
+          ...geojson,
+          features: geojson.features.map(feature => ({
+            ...feature,
+            properties: feature.properties ? 
+              Object.fromEntries(
+                Object.entries(feature.properties)
+                  .filter(([key]) => geoJSONPreview.selectedProperties.has(key))
+              ) : {}
+          }))
+        };
+
         const newLayer: LayerInfo = {
           id: layers.length,
           name: file.name,
           visible: true,
-          data: geojson,
+          data: filteredGeojson,
           color: '#ff0000',
           opacity: 0.7,
           type: 'geojson',
@@ -335,16 +605,14 @@ const GeospatialViewer: React.FC = () => {
         setLayers([...layers, newLayer]);
 
         // Calculate bounds and update view
-        const bounds = calculateBounds(geojson);
+        const bounds = calculateBounds(filteredGeojson);
         if (bounds) {
           const centerLat = (bounds.minLat + bounds.maxLat) / 2;
           const centerLng = (bounds.minLng + bounds.maxLng) / 2;
           const latDiff = bounds.maxLat - bounds.minLat;
           const lngDiff = bounds.maxLng - bounds.minLng;
           
-          // Calculate zoom level based on the coordinate differences
           const maxDiff = Math.max(latDiff, lngDiff);
-          // Use a more appropriate zoom calculation that scales better with geographic size
           const zoom = Math.min(20, Math.max(3, -Math.log2(maxDiff * 2.5)));
 
           setViewState({
@@ -353,10 +621,31 @@ const GeospatialViewer: React.FC = () => {
             zoom,
           });
         }
+
+        // Show success message
+        console.log('Successfully added GeoJSON layer with selected properties');
       } catch (error) {
-        console.error('Error parsing GeoJSON:', error);
+        console.error('Error processing GeoJSON:', error);
+        alert(error instanceof Error ? error.message : 'Error processing GeoJSON file');
+      } finally {
+        setIsLoading(false);
+        setLoadingProgress(100);
+        // Reset preview
+        setGeoJSONPreview(null);
+        // Clear the file input
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
       }
     };
+
+    reader.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const progress = (event.loaded / event.total) * 100;
+        setLoadingProgress(progress);
+      }
+    };
+
     reader.readAsText(file);
   };
 
@@ -562,7 +851,8 @@ const GeospatialViewer: React.FC = () => {
                   <input
                     type="file"
                     accept=".csv"
-                    onChange={handleCSVUpload}
+                    ref={fileInputRef}
+                    onChange={handleCSVPreview}
                     disabled={isLoading}
                     className="block w-full text-sm text-gray-500
                       file:mr-4 file:py-2 file:px-4
@@ -583,8 +873,10 @@ const GeospatialViewer: React.FC = () => {
       </div>
       {isLoading && (
         <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-4">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
+          <div className="bg-white rounded-lg px-8 py-4">
+            <p className="text-lg font-medium text-gray-700">
+              Processing... {Math.round(loadingProgress)}%
+            </p>
           </div>
         </div>
       )}
@@ -757,7 +1049,7 @@ const GeospatialViewer: React.FC = () => {
           handleApplyFilter(showFilterModal!, filter, filterInfo);
           setShowFilterModal(null);
         }}
-        activeFilters={showFilterModal !== null ? activeFilters[showFilterModal]?.map(f => f.info) || [] : []}
+        activeFilters={showFilterModal !== null ? (activeFilters[showFilterModal]?.map(f => f.info) || []) : []}
         onRemoveFilter={(index) => showFilterModal !== null && handleRemoveFilter(showFilterModal, index)}
       />
       <DeckGL
@@ -857,6 +1149,193 @@ const GeospatialViewer: React.FC = () => {
           </a>
         </div>
       </DeckGL>
+      {csvPreview && (
+        <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-[90vw] w-[1000px] max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-gray-900">Preview CSV Data</h2>
+              <button 
+                onClick={() => setCsvPreview(null)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={handleSelectAllColumns}
+                  className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded"
+                >
+                  Select All
+                </button>
+                <button
+                  onClick={handleDeselectAllColumns}
+                  className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded"
+                >
+                  Deselect All
+                </button>
+              </div>
+              <div className="text-sm text-gray-500">
+                {csvPreview.selectedColumns.size} of {csvPreview.headers.length} columns selected
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">
+                      Row
+                    </th>
+                    {csvPreview.headers.map((header, i) => (
+                      <th 
+                        key={i}
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
+                        <div className="flex flex-col space-y-2">
+                          <span>{header}</span>
+                          <label className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              checked={csvPreview.selectedColumns.has(header)}
+                              onChange={() => toggleColumnSelection(header)}
+                              disabled={csvPreview.coordinateColumns.has(header)}
+                              className={`h-4 w-4 rounded border-gray-300 ${
+                                csvPreview.coordinateColumns.has(header)
+                                  ? 'bg-blue-100 text-blue-600 cursor-not-allowed'
+                                  : 'text-blue-600'
+                              }`}
+                            />
+                            <span className="text-xs font-normal">
+                              {csvPreview.coordinateColumns.has(header) && "(Required)"}
+                            </span>
+                          </label>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {csvPreview.rows.map((row, i) => (
+                    <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {i + 1}
+                      </td>
+                      {row.map((cell, j) => (
+                        <td key={j} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {cell}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4 flex justify-end space-x-3">
+              <button
+                onClick={() => setCsvPreview(null)}
+                className="px-4 py-2 text-gray-700 hover:text-gray-900 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={proceedWithSelectedColumns}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
+                disabled={csvPreview.selectedColumns.size === 0}
+              >
+                Proceed with Selected Columns
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {geoJSONPreview && (
+        <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-[90vw] w-[1000px] max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-gray-900">Preview GeoJSON Data</h2>
+              <button 
+                onClick={() => setGeoJSONPreview(null)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={handleSelectAllGeoJSONProperties}
+                  className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded"
+                >
+                  Select All
+                </button>
+                <button
+                  onClick={handleDeselectAllGeoJSONProperties}
+                  className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded"
+                >
+                  Deselect All
+                </button>
+              </div>
+              <div className="text-sm text-gray-500">
+                {geoJSONPreview.selectedProperties.size} of {geoJSONPreview.properties.length} properties selected
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">
+                      Property
+                    </th>
+                    {geoJSONPreview.features.slice(0, 5).map((_, i) => (
+                      <th key={i} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Feature {i + 1}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {geoJSONPreview.properties.map((property, i) => (
+                    <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={geoJSONPreview.selectedProperties.has(property)}
+                            onChange={() => toggleGeoJSONPropertySelection(property)}
+                            className="h-4 w-4 rounded border-gray-300 text-blue-600"
+                          />
+                          <span className="text-sm text-gray-900">{property}</span>
+                        </div>
+                      </td>
+                      {geoJSONPreview.features.slice(0, 5).map((feature, j) => (
+                        <td key={j} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {feature.properties?.[property]}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4 flex justify-end space-x-3">
+              <button
+                onClick={() => setGeoJSONPreview(null)}
+                className="px-4 py-2 text-gray-700 hover:text-gray-900 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={proceedWithSelectedGeoJSONProperties}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
+                disabled={geoJSONPreview.selectedProperties.size === 0}
+              >
+                Proceed with Selected Properties
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
