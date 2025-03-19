@@ -1,54 +1,94 @@
-# React + TypeScript + Vite
+# Geospatial Viewer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A modern, interactive web-based geospatial data viewer built with React and deck.gl. View and analyze GeoJSON and CSV data with customizable styling options.
 
-Currently, two official plugins are available:
+🌍 [Live Demo](https://bobsa514.github.io/geospatial-viewer/)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Features
 
-## Expanding the ESLint configuration
+- 📍 Support for multiple data formats:
+  - GeoJSON files for polygon/line/point data
+  - CSV files with coordinate data (auto-detects lat/long columns)
+- 🎨 Interactive styling options:
+  - Color picker for layers
+  - Opacity control
+  - Point size adjustment for CSV data
+- 👁️ Layer management:
+  - Toggle layer visibility
+  - Collapsible styling controls
+  - Layer reordering
+- 🔍 Interactive features:
+  - Hover to view feature properties
+  - Pan and zoom map controls
+  - Automatic viewport fitting to data
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Installation
 
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```bash
+# Clone the repository
+git clone https://github.com/bobsa514/geospatial-viewer.git
+
+# Navigate to project directory
+cd geospatial-viewer
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Usage
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+1. **Adding GeoJSON Data**:
+   - Click the GeoJSON upload button
+   - Select your GeoJSON file
+   - The layer will be automatically added to the map
 
-export default tseslint.config({
-  plugins: {
-    // Add the react-x and react-dom plugins
-    'react-x': reactX,
-    'react-dom': reactDom,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended typescript rules
-    ...reactX.configs['recommended-typescript'].rules,
-    ...reactDom.configs.recommended.rules,
-  },
-})
+2. **Adding CSV Data**:
+   - Click the CSV upload button
+   - Select a CSV file with coordinate columns
+   - Supported column names:
+     - Latitude: 'lat', 'latitude', 'y'
+     - Longitude: 'lng', 'long', 'longitude', 'x'
+
+3. **Styling Layers**:
+   - Click the expand button next to each layer
+   - Use the color picker to change layer color
+   - Adjust opacity with the slider
+   - For CSV points, adjust point size with the size slider
+
+4. **Managing Layers**:
+   - Toggle layer visibility with the checkbox
+   - Remove layers with the delete button
+   - Collapse/expand styling options as needed
+
+## Development
+
+```bash
+# Start development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Deploy to GitHub Pages
+npm run deploy
 ```
+
+## Technologies Used
+
+- React
+- deck.gl
+- MapboxGL
+- TypeScript
+- Vite
+- TailwindCSS
+
+## License
+
+MIT
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
