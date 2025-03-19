@@ -2,9 +2,20 @@ import React, { useState, useCallback } from 'react';
 import DeckGL from '@deck.gl/react';
 import { GeoJsonLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { Map } from 'react-map-gl';
-import type { MapViewState, ViewStateChangeParameters } from '@deck.gl/core';
+import type { MapViewState } from '@deck.gl/core';
 import type { FeatureCollection, Feature, Geometry } from 'geojson';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import { 
+  PlusIcon, 
+  TrashIcon, 
+  EyeIcon, 
+  EyeSlashIcon,
+  PencilIcon,
+  XMarkIcon,
+  PaintBrushIcon,
+  FunnelIcon
+} from '@heroicons/react/24/outline';
+import { FilterModal, FilterInfo } from './FilterModal';
 
 // Initial viewport state (USA view)
 const INITIAL_VIEW_STATE: MapViewState = {
@@ -43,6 +54,10 @@ const GeospatialViewer: React.FC = () => {
   const [showAddData, setShowAddData] = useState(false);
   const [mapStyle, setMapStyle] = useState("https://basemaps.cartocdn.com/gl/positron-gl-style/style.json");
   const [showBasemapSelector, setShowBasemapSelector] = useState(false);
+  const [showSymbologyModal, setShowSymbologyModal] = useState(false);
+  const [showFilterModal, setShowFilterModal] = useState<number | null>(null);
+  const [activeFilters, setActiveFilters] = useState<{[layerId: number]: { fn: (item: any) => boolean, info: FilterInfo }[]}>({});
+  const [showLayers, setShowLayers] = useState(true);
 
   const basemapOptions = {
     "Light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
@@ -401,6 +416,25 @@ const GeospatialViewer: React.FC = () => {
     return JSON.stringify(feature1.properties) === JSON.stringify(feature2.properties);
   };
 
+  const handleApplyFilter = (layerId: number, filter: (item: any) => boolean, filterInfo: FilterInfo) => {
+    setActiveFilters(prev => ({
+      ...prev,
+      [layerId]: [...(prev[layerId] || []), { fn: filter, info: filterInfo }]
+    }));
+  };
+
+  const handleRemoveFilter = (layerId: number, index: number) => {
+    setActiveFilters(prev => ({
+      ...prev,
+      [layerId]: prev[layerId]?.filter((_, i) => i !== index) || []
+    }));
+  };
+
+  const applyFilters = (layerId: number, data: any[]) => {
+    const layerFilters = activeFilters[layerId] || [];
+    return data.filter(item => layerFilters.every(filter => filter.fn(item)));
+  };
+
   const renderLayers = () => {
     return layers
       .filter(layer => layer.visible)
@@ -408,10 +442,15 @@ const GeospatialViewer: React.FC = () => {
         const [r, g, b] = hexToRGB(layer.color);
         
         if (layer.type === 'csv') {
+          const layerData = layer.data;
+          const filteredData = activeFilters[layer.id]?.length > 0 
+            ? layerData.filter((item: any) => activeFilters[layer.id].every(filter => filter.fn(item)))
+            : layerData;
+
           return new ScatterplotLayer({
             key: layer.id,
             id: `csv-layer-${layer.id}`,
-            data: layer.data,
+            data: filteredData,
             getPosition: (d: any) => d.position,
             getFillColor: [r, g, b, Math.round(layer.opacity * 255)],
             getRadius: (d: any) => {
@@ -446,10 +485,19 @@ const GeospatialViewer: React.FC = () => {
           });
         }
 
+        // For GeoJSON layers
+        const layerData = layer.data;
+        const filteredData = {
+          ...layerData,
+          features: activeFilters[layer.id]?.length > 0
+            ? layerData.features.filter((item: Feature) => activeFilters[layer.id].every(filter => filter.fn(item)))
+            : layerData.features
+        };
+
         return new GeoJsonLayer({
           key: layer.id,
           id: `geojson-layer-${layer.id}`,
-          data: layer.data,
+          data: filteredData,
           filled: true,
           stroked: true,
           lineWidthUnits: "pixels",
@@ -593,96 +641,125 @@ const GeospatialViewer: React.FC = () => {
           </div>
         </div>
       )}
-      <div className="absolute bottom-4 left-4 z-10 bg-white rounded-lg shadow-lg p-4 max-w-md">
-        <h3 className="text-sm font-medium text-gray-900 mb-2">Layers</h3>
-        <div className="space-y-4">
-          {layers.map(layer => (
-            <div key={layer.id} className="bg-white rounded-md border border-gray-200 overflow-hidden">
-              <div className="flex items-center justify-between p-2">
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
-                    checked={layer.visible}
-                    onChange={() => toggleLayer(layer.id)}
-                    className="h-4 w-4 text-blue-600 rounded border-gray-300"
-                  />
-                  <span className="text-sm text-gray-700 truncate max-w-[150px]">{layer.name}</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => toggleLayerExpanded(layer.id)}
-                    className="text-gray-500 hover:text-gray-700"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                      {layer.isExpanded ? (
-                        <path fillRule="evenodd" d="M5 10a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1z" clipRule="evenodd" />
-                      ) : (
-                        <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clipRule="evenodd" />
-                      )}
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => removeLayer(layer.id)}
-                    className="text-red-600 hover:text-red-800"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-              {layer.isExpanded && (
-                <div className="border-t border-gray-200 p-2 space-y-2 bg-gray-50">
-                  <div className="flex items-center justify-between space-x-2">
-                    <span className="text-xs text-gray-500">Color</span>
+      <div className="absolute bottom-4 left-4 z-10">
+        <div className="flex flex-col space-y-2">
+          <button
+            onClick={() => setShowLayers(!showLayers)}
+            className="bg-white p-2 rounded-lg shadow-lg hover:bg-gray-50 transition-colors"
+            title={showLayers ? "Hide Layers" : "Show Layers"}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      {showLayers && (
+        <div className="absolute bottom-16 left-4 z-10 bg-white rounded-lg shadow-lg p-4 max-w-md">
+          <h3 className="text-sm font-medium text-gray-900 mb-2">Layers</h3>
+          <div className="space-y-4">
+            {layers.map(layer => (
+              <div key={layer.id} className="bg-white rounded-md border border-gray-200 overflow-hidden">
+                <div className="flex items-center justify-between p-2">
+                  <div className="flex items-center space-x-2">
                     <input
-                      type="color"
-                      value={layer.color}
-                      onChange={(e) => updateLayerColor(layer.id, e.target.value)}
-                      className="h-6 w-6 rounded cursor-pointer"
+                      type="checkbox"
+                      checked={layer.visible}
+                      onChange={() => toggleLayer(layer.id)}
+                      className="h-4 w-4 text-blue-600 rounded border-gray-300"
                     />
+                    <span className="text-sm text-gray-700 truncate max-w-[150px]">{layer.name}</span>
                   </div>
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-500">Opacity</span>
-                      <span className="text-xs text-gray-600">{Math.round(layer.opacity * 100)}%</span>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => toggleLayerExpanded(layer.id)}
+                      className="text-gray-500 hover:text-gray-700"
+                      title="Symbology"
+                    >
+                      <PaintBrushIcon className="h-5 w-5" />
+                    </button>
+                    <button
+                      onClick={() => setShowFilterModal(layer.id)}
+                      className="text-gray-500 hover:text-gray-700"
+                      title="Filter"
+                    >
+                      <FunnelIcon className="h-5 w-5" />
+                    </button>
+                    <button
+                      onClick={() => removeLayer(layer.id)}
+                      className="text-red-600 hover:text-red-800"
+                      title="Remove Layer"
+                    >
+                      <XMarkIcon className="h-5 w-5" />
+                    </button>
+                  </div>
+                </div>
+                {layer.isExpanded && (
+                  <div className="border-t border-gray-200 p-2 space-y-2 bg-gray-50">
+                    <div className="flex items-center justify-between space-x-2">
+                      <span className="text-xs text-gray-500">Color</span>
+                      <input
+                        type="color"
+                        value={layer.color}
+                        onChange={(e) => updateLayerColor(layer.id, e.target.value)}
+                        className="h-6 w-6 rounded cursor-pointer"
+                      />
                     </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.1"
-                      value={layer.opacity}
-                      onChange={(e) => updateLayerOpacity(layer.id, parseFloat(e.target.value))}
-                      className="w-full"
-                    />
-                  </div>
-                  {layer.type === 'csv' && (
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs text-gray-500">Point Size</span>
-                        <span className="text-xs text-gray-600">{layer.pointSize || 5}px</span>
+                        <span className="text-xs text-gray-500">Opacity</span>
+                        <span className="text-xs text-gray-600">{Math.round(layer.opacity * 100)}%</span>
                       </div>
                       <input
                         type="range"
-                        min="1"
-                        max="20"
-                        step="1"
-                        value={layer.pointSize || 5}
-                        onChange={(e) => {
-                          const size = parseInt(e.target.value);
-                          updateLayerPointSize(layer.id, size);
-                        }}
+                        min="0"
+                        max="1"
+                        step="0.1"
+                        value={layer.opacity}
+                        onChange={(e) => updateLayerOpacity(layer.id, parseFloat(e.target.value))}
                         className="w-full"
                       />
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+                    {layer.type === 'csv' && (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-500">Point Size</span>
+                          <span className="text-xs text-gray-600">{layer.pointSize || 5}px</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="1"
+                          max="20"
+                          step="1"
+                          value={layer.pointSize || 5}
+                          onChange={(e) => {
+                            const size = parseInt(e.target.value);
+                            updateLayerPointSize(layer.id, size);
+                          }}
+                          className="w-full"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
+      <FilterModal
+        isOpen={showFilterModal !== null}
+        onClose={() => setShowFilterModal(null)}
+        data={layers.find(l => l.id === showFilterModal)?.type === 'csv' 
+          ? layers.find(l => l.id === showFilterModal)?.data
+          : layers.find(l => l.id === showFilterModal)?.data.features || []}
+        onApplyFilter={(filter, filterInfo) => {
+          handleApplyFilter(showFilterModal!, filter, filterInfo);
+          setShowFilterModal(null);
+        }}
+        activeFilters={showFilterModal !== null ? activeFilters[showFilterModal]?.map(f => f.info) || [] : []}
+        onRemoveFilter={(index) => showFilterModal !== null && handleRemoveFilter(showFilterModal, index)}
+      />
       <DeckGL
         style={{ width: '100%', height: '100%' }}
         viewState={viewState}

@@ -1,4 +1,3 @@
-import React from 'react'
 import GeospatialViewer from './components/GeospatialViewer'
 import './App.css'
 
