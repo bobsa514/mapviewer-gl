@@ -5,4 +5,16 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: '/geospatial-viewer/',
+  build: {
+    sourcemap: true,
+    chunkSizeWarningLimit: 1000, // Increase chunk size warning limit to 1000kb
+  },
+  server: {
+    fs: {
+      strict: false
+    },
+    hmr: {
+      overlay: false
+    }
+  }
 })
