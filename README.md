@@ -10,11 +10,17 @@ A modern web-based map viewer that supports multiple data formats and interactiv
 - **No Data Storage**: Please note that this tool does not store any data on the server. All data processing occurs locally on the user's machine. Once the session is closed, any uploaded data will be lost. This design ensures user privacy and data security.
 
 ### Mapbox Token
-- **Environment Configuration**: It is crucial to change the `.env` file in your project directory to include your own Mapbox token. This is important because using my token may lead to it being maxed out due to usage limits. 
+- **Environment Configuration**: It is REQUIRED to change the `.env` file in your project directory to include your own Mapbox token. The demo token included has strict usage limits and may stop working if exceeded.
+- **Token Requirements**: 
+  - Sign up for a free account at [Mapbox](https://www.mapbox.com/signup/)
+  - Create a new public token in your account
+  - The free tier includes 50,000 map loads per month
+  - The map will stop working if this limit is exceeded
 - To set your token, open the `.env` file and replace the placeholder with your own Mapbox access token:
   ```plaintext
   VITE_MAPBOX_TOKEN=your_mapbox_token_here
   ```
+- **⚠️ Warning**: Never commit your `.env` file to version control. Add it to your `.gitignore` file.
 
 ## Features
 
