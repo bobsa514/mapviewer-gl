@@ -4,6 +4,18 @@ A modern, lightweight, interactive web-based geospatial data viewer built with R
 
 🌍 [Live Demo](https://bobsa514.github.io/geospatial-viewer/)
 
+## Important Notes
+
+### Data Storage
+- **No Data Storage**: Please note that this tool does not store any data on the server. All data processing occurs locally on the user's machine. Once the session is closed, any uploaded data will be lost. This design ensures user privacy and data security.
+
+### Mapbox Token
+- **Environment Configuration**: It is crucial to change the `.env` file in your project directory to include your own Mapbox token. This is important because using my token may lead to it being maxed out due to usage limits. 
+- To set your token, open the `.env` file and replace the placeholder with your own Mapbox access token:
+  ```plaintext
+  VITE_MAPBOX_TOKEN=your_mapbox_token_here
+  ```
+
 ## Features
 
 - 📍 Support for multiple data formats:
@@ -28,23 +40,14 @@ A modern, lightweight, interactive web-based geospatial data viewer built with R
   - Column selection for display
   - Advanced filtering options
 
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/bobsa514/geospatial-viewer.git
-
-# Navigate to project directory
-cd geospatial-viewer
-
-# Install dependencies
-npm install
-
-# Start development server
-npm run dev
-```
+## Usage
+1. Clone the repository.
+2. Install dependencies using `npm install`.
+3. Update the `.env` file with your Mapbox token.
+4. Run the application using `npm run dev`.
+5. Deploy the application using `npm run deploy`.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit issues or pull requests.
 Connect to me at <me@boyangsa.com>
