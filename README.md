@@ -1,8 +1,8 @@
-# Geospatial Viewer
+# MapViewerGL
 
-A modern, lightweight, interactive web-based geospatial data viewer built with React and deck.gl. View and analyze GeoJSON and CSV data with customizable styling options.
+A modern web-based map viewer that supports multiple data formats and interactive visualization.
 
-🌍 [Live Demo](https://bobsa514.github.io/geospatial-viewer/)
+🌍 [Live Demo](https://bobsa514.github.io/mapviewer-gl/)
 
 ## Important Notes
 
