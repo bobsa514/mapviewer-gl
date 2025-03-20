@@ -16,6 +16,11 @@ A modern web-based map viewer that supports multiple data formats and interactiv
   - Create a new public token in your account
   - The free tier includes 50,000 map loads per month
   - The map will stop working if this limit is exceeded
+- **Usage Limits**:
+  - The free Mapbox tier has a limit of 50,000 map loads per month
+  - Once this limit is reached, the map will stop loading for new users
+  - The limit resets at the start of each billing cycle
+  - Consider using the free CartoDB basemaps ("Light", "Dark", "City") which don't have these restrictions
 - To set your token, open the `.env` file and replace the placeholder with your own Mapbox access token:
   ```plaintext
   VITE_MAPBOX_TOKEN=your_mapbox_token_here
