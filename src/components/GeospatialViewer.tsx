@@ -16,6 +16,8 @@ import {
   FunnelIcon
 } from '@heroicons/react/24/outline';
 import { FilterModal, FilterInfo } from './FilterModal';
+import { H3HexagonLayer } from '@deck.gl/geo-layers';
+import * as h3 from 'h3-js';
 
 // Initial viewport state (USA view)
 const INITIAL_VIEW_STATE: MapViewState = {
@@ -31,13 +33,15 @@ interface LayerInfo {
   data: FeatureCollection | any; // Allow any for CSV data
   color: string;
   opacity: number;
-  type: 'geojson' | 'csv';
+  type: 'geojson' | 'point' | 'h3'; // Updated type to distinguish between point and h3
   columns?: {
     lat: string;
     lng: string;
   };
   pointSize?: number; // Now represents pixel size
   isExpanded?: boolean; // Add expanded state for symbology controls
+  isH3Data?: boolean;
+  h3Column?: string;
 }
 
 interface CSVPreviewData {
@@ -45,12 +49,20 @@ interface CSVPreviewData {
   rows: string[][];
   selectedColumns: Set<string>;
   coordinateColumns: Set<string>;
+  isH3Data: boolean;
+  h3Column?: string;
 }
 
 interface GeoJSONPreviewData {
   properties: string[];
   features: Feature[];
   selectedProperties: Set<string>;
+}
+
+interface HoverInfo {
+  x: number;
+  y: number;
+  data: any;
 }
 
 const GeospatialViewer: React.FC = () => {
@@ -74,7 +86,9 @@ const GeospatialViewer: React.FC = () => {
   const [showLayers, setShowLayers] = useState(true);
   const [csvPreview, setCsvPreview] = useState<CSVPreviewData | null>(null);
   const [geoJSONPreview, setGeoJSONPreview] = useState<GeoJSONPreviewData | null>(null);
+  const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isFeatureLocked, setIsFeatureLocked] = useState(false);
 
   const basemapOptions = {
     "Light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
@@ -180,12 +194,39 @@ const GeospatialViewer: React.FC = () => {
     return null;
   };
 
+  const detectH3Column = (headers: string[]): string | null => {
+    // Common names for H3 index columns
+    const possibleH3Names = ['hex_id', 'h3_index', 'h3', 'hexagon'];
+    
+    // Find the first matching column (case-insensitive)
+    const h3Column = headers.find(h => 
+      possibleH3Names.some(name => h.toLowerCase().trim() === name.toLowerCase())
+    );
+    
+    if (h3Column) {
+      return h3Column;
+    }
+    
+    // If no exact match, look for columns containing these terms
+    return headers.find(h => 
+      possibleH3Names.some(name => h.toLowerCase().includes(name.toLowerCase()))
+    ) || null;
+  };
+
+  const isValidH3Index = (value: string): boolean => {
+    try {
+      return h3.isValidCell(value);
+    } catch {
+      return false;
+    }
+  };
+
   const processChunk = useCallback((
     lines: string[],
     startIndex: number,
     headers: string[],
-    headerIndices: number[],
-    columns: { lat: string; lng: string },
+    selectedColumns: Set<string>,
+    coordinates: { lat: string; lng: string },
     latIndex: number,
     lngIndex: number,
     chunkSize: number,
@@ -213,18 +254,12 @@ const GeospatialViewer: React.FC = () => {
       }
 
       // Only include selected columns
-      const properties = {
-        [columns.lat]: lat,
-        [columns.lng]: lng,
-        ...Object.fromEntries(
-          headers
-            .map((h, idx) => [h, values[headerIndices[idx]]])
-            .filter(([key]) => 
-              key.toLowerCase() !== columns.lat.toLowerCase() && 
-              key.toLowerCase() !== columns.lng.toLowerCase()
-            )
-        )
-      };
+      const properties: { [key: string]: any } = {};
+      headers.forEach((header, idx) => {
+        if (selectedColumns.has(header)) {
+          properties[header] = values[idx];
+        }
+      });
 
       data.push({
         position: [lng, lat],
@@ -261,9 +296,9 @@ const GeospatialViewer: React.FC = () => {
         // Parse headers and clean them
         const headers = lines[0].split(',').map(h => h.trim());
         
-        // Parse data rows more carefully
+        // Parse data rows carefully
         const previewRows = lines.slice(1, 11).map(line => {
-          const row = new Array(headers.length).fill(''); // Initialize with empty strings
+          const row = new Array(headers.length).fill('');
           let currentCell = '';
           let inQuotes = false;
           let cellIndex = 0;
@@ -294,12 +329,25 @@ const GeospatialViewer: React.FC = () => {
           return row;
         });
 
-        // Identify coordinate columns using the updated detection logic
-        const coordinates = detectCoordinateColumns(headers);
+        // Check for H3 index column
+        const h3Column = detectH3Column(headers);
+        const h3ColumnIndex = h3Column ? headers.indexOf(h3Column) : -1;
+        
+        // Validate H3 indexes if found
+        let isH3Data = false;
+        if (h3ColumnIndex !== -1) {
+          const sampleH3Value = previewRows[0][h3ColumnIndex];
+          isH3Data = isValidH3Index(sampleH3Value);
+        }
+
+        // Identify coordinate columns only if not H3 data
         const coordinateColumns = new Set<string>();
-        if (coordinates) {
-          coordinateColumns.add(coordinates.lat);
-          coordinateColumns.add(coordinates.lng);
+        if (!isH3Data) {
+          const coordinates = detectCoordinateColumns(headers);
+          if (coordinates) {
+            coordinateColumns.add(coordinates.lat);
+            coordinateColumns.add(coordinates.lng);
+          }
         }
 
         // By default, select all columns
@@ -309,7 +357,9 @@ const GeospatialViewer: React.FC = () => {
           headers,
           rows: previewRows,
           selectedColumns: defaultSelected,
-          coordinateColumns
+          coordinateColumns,
+          isH3Data,
+          h3Column: h3Column || undefined
         });
       } catch (error) {
         console.error('Error parsing CSV:', error);
@@ -358,144 +408,155 @@ const GeospatialViewer: React.FC = () => {
   const proceedWithSelectedColumns = () => {
     if (!fileInputRef.current?.files?.[0] || !csvPreview) return;
     
-    // Store selected columns for filtering during processing
-    const selectedColumns = Array.from(csvPreview.selectedColumns);
     const file = fileInputRef.current.files[0];
-    
-    // Reset preview
-    setCsvPreview(null);
-    
-    // Process the file with selected columns
-    handleCSVUpload(file, selectedColumns);
-  };
-
-  const handleCSVUpload = (file: File, selectedColumns?: string[]) => {
     setIsLoading(true);
     setLoadingProgress(0);
+    
     const reader = new FileReader();
-    reader.onload = async (e) => {
+    reader.onload = (e) => {
       try {
         const csvText = e.target?.result as string;
-        console.log('Processing CSV file:', file.name, 'Size:', (file.size / 1024 / 1024).toFixed(2), 'MB');
-
-        const lines = csvText
-          .split(/\r?\n/)
-          .map(line => line.trim())
-          .filter(line => line.length > 0);
-
-        if (lines.length < 2) {
-          throw new Error('CSV file is empty or has no data rows');
-        }
-
+        const lines = csvText.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
         const headers = lines[0].split(',').map(h => h.trim());
         
-        // If we have selected columns, filter the headers and data
-        const processedHeaders = selectedColumns || headers;
-        const headerIndices = processedHeaders.map(h => headers.indexOf(h));
-
-        const columns = detectCoordinateColumns(processedHeaders);
-        if (!columns) {
-          throw new Error('Could not detect latitude and longitude columns');
-        }
-
-        const latIndex = headerIndices[processedHeaders.indexOf(columns.lat)];
-        const lngIndex = headerIndices[processedHeaders.indexOf(columns.lng)];
-
-        // Find column indices
-        const CHUNK_SIZE = 10000;
-        let currentIndex = 1;
-        let allData: any[] = [];
-        let totalValidPoints = 0;
-        let totalInvalidPoints = 0;
-        let bounds = {
-          minLat: Infinity,
-          maxLat: -Infinity,
-          minLng: Infinity,
-          maxLng: -Infinity
-        };
-
-        while (currentIndex < lines.length) {
-          const { 
-            data: chunkData, 
-            validPoints, 
-            invalidPoints, 
-            endIndex 
-          } = processChunk(
-            lines, 
-            currentIndex, 
-            processedHeaders,
-            headerIndices,
-            columns, 
-            latIndex, 
-            lngIndex, 
-            CHUNK_SIZE,
-            setLoadingProgress
-          );
-
-          // Update statistics
-          totalValidPoints += validPoints;
-          totalInvalidPoints += invalidPoints;
-
-          // Update bounds
-          chunkData.forEach(point => {
-            bounds.minLat = Math.min(bounds.minLat, point.position[1]);
-            bounds.maxLat = Math.max(bounds.maxLat, point.position[1]);
-            bounds.minLng = Math.min(bounds.minLng, point.position[0]);
-            bounds.maxLng = Math.max(bounds.maxLng, point.position[0]);
+        // Process data based on type (H3 or coordinates)
+        if (csvPreview.isH3Data && csvPreview.h3Column) {
+          const h3ColumnIndex = headers.indexOf(csvPreview.h3Column);
+          const hexagons = lines.slice(1).map(line => {
+            const values = line.split(',').map(cell => cell.trim());
+            const h3Index = values[h3ColumnIndex];
+            
+            const properties: { [key: string]: string } = {};
+            headers.forEach((header, index) => {
+              if (csvPreview.selectedColumns.has(header) && index !== h3ColumnIndex) {
+                properties[header] = values[index];
+              }
+            });
+            
+            return {
+              hex: h3Index,
+              properties
+            };
           });
+          
+          const newLayer: LayerInfo = {
+            id: layers.length,
+            name: file.name,
+            visible: true,
+            data: hexagons,
+            color: '#ff0000',
+            opacity: 0.7,
+            type: 'h3'
+          };
+          
+          setLayers([...layers, newLayer]);
+          
+          if (hexagons.length > 0) {
+            const firstHex = hexagons[0].hex;
+            const [centerLat, centerLng] = h3.cellToLatLng(firstHex);
+            
+            setViewState({
+              latitude: centerLat,
+              longitude: centerLng,
+              zoom: 11
+            });
+          }
+        } else {
+          // Process coordinate-based CSV as points
+          const coordinates = detectCoordinateColumns(headers);
+          if (!coordinates) {
+            throw new Error('Could not detect latitude and longitude columns');
+          }
 
-          // Append chunk data
-          allData = allData.concat(chunkData);
-          currentIndex = endIndex;
+          const latIndex = headers.indexOf(coordinates.lat);
+          const lngIndex = headers.indexOf(coordinates.lng);
+          
+          const CHUNK_SIZE = 10000;
+          let currentIndex = 1;
+          let allData: any[] = [];
+          let bounds = {
+            minLat: Infinity,
+            maxLat: -Infinity,
+            minLng: Infinity,
+            maxLng: -Infinity
+          };
 
-          // Allow UI to update by yielding to the event loop
-          await new Promise(resolve => setTimeout(resolve, 0));
+          while (currentIndex < lines.length) {
+            const { 
+              data: chunkData, 
+              validPoints, 
+              invalidPoints, 
+              endIndex 
+            } = processChunk(
+              lines, 
+              currentIndex,
+              headers,
+              csvPreview.selectedColumns,
+              coordinates,
+              latIndex,
+              lngIndex,
+              CHUNK_SIZE,
+              setLoadingProgress
+            );
+
+            // Update bounds
+            chunkData.forEach(point => {
+              bounds.minLat = Math.min(bounds.minLat, point.position[1]);
+              bounds.maxLat = Math.max(bounds.maxLat, point.position[1]);
+              bounds.minLng = Math.min(bounds.minLng, point.position[0]);
+              bounds.maxLng = Math.max(bounds.maxLng, point.position[0]);
+            });
+
+            // Append chunk data
+            allData = allData.concat(chunkData);
+            currentIndex = endIndex;
+          }
+
+          if (allData.length === 0) {
+            throw new Error('No valid data points found in CSV');
+          }
+
+          const centerLat = (bounds.minLat + bounds.maxLat) / 2;
+          const centerLng = (bounds.minLng + bounds.maxLng) / 2;
+          const latDiff = bounds.maxLat - bounds.minLat;
+          const lngDiff = bounds.maxLng - bounds.minLng;
+          
+          const maxDiff = Math.max(latDiff, lngDiff);
+          const zoom = Math.min(20, Math.max(3, -Math.log2(maxDiff * 2.5)));
+
+          const newLayer: LayerInfo = {
+            id: layers.length,
+            name: file.name,
+            visible: true,
+            data: allData,
+            color: '#ff0000',
+            opacity: 0.7,
+            type: 'point',
+            columns: coordinates,
+            pointSize: 5
+          };
+          
+          setLayers([...layers, newLayer]);
+          setViewState({
+            latitude: centerLat,
+            longitude: centerLng,
+            zoom
+          });
         }
-
-        console.log('CSV processing complete:', {
-          totalRows: lines.length - 1,
-          validPoints: totalValidPoints,
-          invalidPoints: totalInvalidPoints
-        });
-
-        if (allData.length === 0) {
-          throw new Error('No valid data points found in CSV');
-        }
-
-        const centerLat = (bounds.minLat + bounds.maxLat) / 2;
-        const centerLng = (bounds.minLng + bounds.maxLng) / 2;
-        const latDiff = bounds.maxLat - bounds.minLat;
-        const lngDiff = bounds.maxLng - bounds.minLng;
         
-        const maxDiff = Math.max(latDiff, lngDiff);
-        const zoom = Math.min(20, Math.max(3, -Math.log2(maxDiff * 2.5)));
-
-        const newLayer: LayerInfo = {
-          id: layers.length,
-          name: file.name,
-          visible: true,
-          data: allData,
-          color: '#ff0000',
-          opacity: 0.7,
-          type: 'csv',
-          columns,
-          pointSize: 5
-        };
-        setLayers([...layers, newLayer]);
-
-        setViewState({
-          latitude: centerLat,
-          longitude: centerLng,
-          zoom,
-        });
       } catch (error) {
-        console.error('Error parsing CSV:', error);
-        alert(error instanceof Error ? error.message : 'Error parsing CSV file');
+        console.error('Error processing CSV:', error);
+        alert(error instanceof Error ? error.message : 'Error processing CSV file');
       } finally {
         setIsLoading(false);
-        setLoadingProgress(0);
+        setLoadingProgress(100);
+        setCsvPreview(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
       }
     };
+    
     reader.readAsText(file);
   };
 
@@ -660,6 +721,16 @@ const GeospatialViewer: React.FC = () => {
     // Reset selected feature and columns when removing a layer
     setSelectedFeature(null);
     setSelectedColumns([]);
+    // Clean up filters for the removed layer
+    setActiveFilters(prev => {
+      const newFilters = { ...prev };
+      delete newFilters[layerId];
+      return newFilters;
+    });
+    // Close filter modal if it's open for this layer
+    if (showFilterModal === layerId) {
+      setShowFilterModal(null);
+    }
   };
 
   const updateLayerColor = (layerId: number, color: string) => {
@@ -694,14 +765,20 @@ const GeospatialViewer: React.FC = () => {
   };
 
   // Add this function to compare features
-  const areFeaturesEqual = (feature1: Feature, feature2: Feature): boolean => {
+  const areFeaturesEqual = (feature1: Feature | null, feature2: Feature | null): boolean => {
+    if (!feature1 || !feature2) return false;
     if (feature1.geometry.type !== feature2.geometry.type) return false;
     
     if (feature1.geometry.type === 'Point' && feature2.geometry.type === 'Point') {
       return JSON.stringify(feature1.geometry.coordinates) === JSON.stringify(feature2.geometry.coordinates);
     }
     
-    // For polygons and other geometries, compare their properties
+    // For H3 hexagons, compare their coordinates
+    if (feature1.geometry.type === 'Polygon' && feature2.geometry.type === 'Polygon') {
+      return JSON.stringify(feature1.geometry.coordinates) === JSON.stringify(feature2.geometry.coordinates);
+    }
+    
+    // For other geometries, compare their properties
     return JSON.stringify(feature1.properties) === JSON.stringify(feature2.properties);
   };
 
@@ -730,22 +807,72 @@ const GeospatialViewer: React.FC = () => {
       .map((layer: LayerInfo) => {
         const [r, g, b] = hexToRGB(layer.color);
         
-        if (layer.type === 'csv') {
+        if (layer.type === 'h3') {
+          return new H3HexagonLayer({
+            id: `h3-layer-${layer.id}`,
+            data: layer.data,
+            pickable: true,
+            wireframe: true,
+            filled: true,
+            extruded: false,
+            getHexagon: d => d.hex,
+            getFillColor: [r, g, b, Math.round(layer.opacity * 255)],
+            getLineColor: [255, 255, 255],
+            lineWidthMinPixels: 1,
+            opacity: layer.opacity,
+            onClick: (info: any) => {
+              if (info.object) {
+                const hexBoundary = h3.cellToBoundary(info.object.hex);
+                const feature = {
+                  type: 'Feature',
+                  geometry: {
+                    type: 'Polygon',
+                    coordinates: [hexBoundary]
+                  },
+                  properties: info.object.properties
+                } as Feature;
+
+                if (isFeatureLocked && selectedFeature?.geometry.type === 'Polygon' &&
+                    JSON.stringify(selectedFeature.geometry.coordinates) === JSON.stringify([hexBoundary])) {
+                  setIsFeatureLocked(false);
+                  setSelectedFeature(null);
+                } else {
+                  setSelectedFeature(feature);
+                  setIsFeatureLocked(true);
+                }
+              }
+            },
+            onHover: (info: any) => {
+              if (!isFeatureLocked && info.object) {
+                const feature = {
+                  type: 'Feature',
+                  geometry: {
+                    type: 'Polygon',
+                    coordinates: [h3.cellToBoundary(info.object.hex)]
+                  },
+                  properties: info.object.properties
+                } as Feature;
+                setSelectedFeature(feature);
+              } else if (!isFeatureLocked) {
+                setSelectedFeature(null);
+              }
+            }
+          });
+        } else if (layer.type === 'point') {
           const layerData = layer.data;
           const filteredData = activeFilters[layer.id]?.length > 0 
             ? layerData.filter((item: any) => activeFilters[layer.id].every(filter => filter.fn(item)))
             : layerData;
 
           return new ScatterplotLayer({
-            key: layer.id,
-            id: `csv-layer-${layer.id}`,
+            id: `point-layer-${layer.id}`,
             data: filteredData,
             getPosition: (d: any) => d.position,
             getFillColor: [r, g, b, Math.round(layer.opacity * 255)],
             getRadius: (d: any) => {
               if (selectedFeature && 
                   selectedFeature.geometry.type === 'Point' &&
-                  JSON.stringify(d.position) === JSON.stringify(selectedFeature.geometry.coordinates)) {
+                  JSON.stringify(selectedFeature.geometry.coordinates) === JSON.stringify(d.position)) {
                 return (layer.pointSize || 5) * 2;
               }
               return layer.pointSize || 5;
@@ -768,7 +895,30 @@ const GeospatialViewer: React.FC = () => {
                   },
                   properties: info.object.properties
                 } as Feature;
+
+                if (isFeatureLocked && selectedFeature?.geometry.type === 'Point' &&
+                    JSON.stringify(selectedFeature.geometry.coordinates) === JSON.stringify(info.object.position)) {
+                  setIsFeatureLocked(false);
+                  setSelectedFeature(null);
+                } else {
+                  setSelectedFeature(feature);
+                  setIsFeatureLocked(true);
+                }
+              }
+            },
+            onHover: (info: any) => {
+              if (!isFeatureLocked && info.object) {
+                const feature = {
+                  type: 'Feature',
+                  geometry: {
+                    type: 'Point',
+                    coordinates: info.object.position
+                  },
+                  properties: info.object.properties
+                } as Feature;
                 setSelectedFeature(feature);
+              } else if (!isFeatureLocked) {
+                setSelectedFeature(null);
               }
             }
           });
@@ -784,7 +934,6 @@ const GeospatialViewer: React.FC = () => {
         };
 
         return new GeoJsonLayer({
-          key: layer.id,
           id: `geojson-layer-${layer.id}`,
           data: filteredData,
           filled: true,
@@ -793,18 +942,33 @@ const GeospatialViewer: React.FC = () => {
           lineWidthMinPixels: 1,
           getFillColor: (d: Feature) => {
             if (selectedFeature && areFeaturesEqual(d, selectedFeature)) {
-              return [r, g, b, Math.round(layer.opacity * 255)]; // Full opacity for selected
+              return [r, g, b, Math.round(layer.opacity * 255)];
             }
-            return [r, g, b, Math.round(layer.opacity * 128)]; // More transparent for non-selected
+            return [r, g, b, Math.round(layer.opacity * 128)];
           },
-          getLineColor: [r, g, b, 255], // Always show borders with full opacity
+          getLineColor: [r, g, b, 255],
           pickable: true,
           updateTriggers: {
             getFillColor: [layer.color, layer.opacity, selectedFeature],
             lineWidthMinPixels: [selectedFeature]
           },
           onClick: (info: any) => {
-            setSelectedFeature(info.object as Feature);
+            if (info.object) {
+              if (isFeatureLocked && areFeaturesEqual(info.object, selectedFeature)) {
+                setIsFeatureLocked(false);
+                setSelectedFeature(null);
+              } else {
+                setSelectedFeature(info.object);
+                setIsFeatureLocked(true);
+              }
+            }
+          },
+          onHover: (info: any) => {
+            if (!isFeatureLocked && info.object) {
+              setSelectedFeature(info.object);
+            } else if (!isFeatureLocked) {
+              setSelectedFeature(null);
+            }
           }
         });
       });
@@ -827,7 +991,7 @@ const GeospatialViewer: React.FC = () => {
             <div className="p-4 border-t border-gray-200">
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
                     Upload GeoJSON
                   </label>
                   <input
@@ -845,8 +1009,8 @@ const GeospatialViewer: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Upload CSV (Points)
+                  <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
+                    Upload CSV
                   </label>
                   <input
                     type="file"
@@ -862,9 +1026,18 @@ const GeospatialViewer: React.FC = () => {
                       hover:file:bg-blue-100
                       disabled:opacity-50 disabled:cursor-not-allowed"
                   />
-                  <p className="mt-1 text-xs text-gray-500">
-                    CSV should have columns named lat/latitude/y and lng/longitude/x
-                  </p>
+                  <div className="mt-2 text-xs text-gray-500 space-y-1 text-left">
+                    <p>Supports two types of CSV files:</p>
+                    <p>1. Point data with coordinate columns:</p>
+                    <ul className="list-disc list-inside ml-2">
+                      <li>Latitude (lat/latitude/y)</li>
+                      <li>Longitude (lng/long/longitude/x)</li>
+                    </ul>
+                    <p>2. H3 hexagon data with index column:</p>
+                    <ul className="list-disc list-inside ml-2">
+                      <li>H3 index (hex_id/h3_index/h3/hexagon)</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
             </div>
@@ -883,7 +1056,9 @@ const GeospatialViewer: React.FC = () => {
       {selectedFeature && (
         <div className="absolute top-4 right-4 z-10 bg-white rounded-lg shadow-lg p-4 max-w-md">
           <div className="flex justify-between items-center mb-2">
-            <h3 className="text-sm font-medium text-gray-900">Feature Properties</h3>
+            <h3 className="text-sm font-medium text-gray-900">
+              Feature Properties {isFeatureLocked && "(Locked)"}
+            </h3>
             <div className="flex items-center space-x-2">
               <button
                 onClick={() => setShowColumnSelector(!showColumnSelector)}
@@ -895,7 +1070,10 @@ const GeospatialViewer: React.FC = () => {
                 </svg>
               </button>
               <button
-                onClick={() => setSelectedFeature(null)}
+                onClick={() => {
+                  setSelectedFeature(null);
+                  setIsFeatureLocked(false);
+                }}
                 className="text-gray-500 hover:text-gray-700"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -1012,7 +1190,7 @@ const GeospatialViewer: React.FC = () => {
                         className="w-full"
                       />
                     </div>
-                    {layer.type === 'csv' && (
+                    {layer.type === 'point' && (
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="text-xs text-gray-500">Point Size</span>
@@ -1042,15 +1220,29 @@ const GeospatialViewer: React.FC = () => {
       <FilterModal
         isOpen={showFilterModal !== null}
         onClose={() => setShowFilterModal(null)}
-        data={layers.find(l => l.id === showFilterModal)?.type === 'csv' 
+        data={layers.find(l => l.id === showFilterModal)?.type === 'point' 
           ? layers.find(l => l.id === showFilterModal)?.data
+          : layers.find(l => l.id === showFilterModal)?.type === 'h3'
+          ? layers.find(l => l.id === showFilterModal)?.data.map((d: any) => d.properties)
           : layers.find(l => l.id === showFilterModal)?.data.features || []}
         onApplyFilter={(filter, filterInfo) => {
-          handleApplyFilter(showFilterModal!, filter, filterInfo);
+          if (showFilterModal !== null) {
+            const layer = layers.find(l => l.id === showFilterModal);
+            if (layer) {
+              const wrappedFilter = (item: any) => {
+                if (layer.type === 'h3') {
+                  return filter(item.properties);
+                }
+                return filter(item);
+              };
+              handleApplyFilter(showFilterModal, wrappedFilter, filterInfo);
+            }
+          }
           setShowFilterModal(null);
         }}
         activeFilters={showFilterModal !== null ? (activeFilters[showFilterModal]?.map(f => f.info) || []) : []}
         onRemoveFilter={(index) => showFilterModal !== null && handleRemoveFilter(showFilterModal, index)}
+        layerType={layers.find(l => l.id === showFilterModal)?.type}
       />
       <DeckGL
         style={{ width: '100%', height: '100%' }}
