@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "homepage": "https://bobsa514.github.io/mapviewer-gl/",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
