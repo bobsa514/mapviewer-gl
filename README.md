@@ -21,6 +21,7 @@ A modern, lightweight, interactive web-based geospatial data viewer built with R
 - 📍 Support for multiple data formats:
   - GeoJSON files for polygon/line/point data
   - CSV files with coordinate data (auto-detects lat/long columns)
+  - CSV files with H3 hexagon indices
 - 🎨 Interactive styling options:
   - Color picker for layers
   - Opacity control
@@ -39,6 +40,24 @@ A modern, lightweight, interactive web-based geospatial data viewer built with R
   - Feature property inspection
   - Column selection for display
   - Advanced filtering options
+
+## Data Format Requirements
+
+### GeoJSON
+- Standard GeoJSON format with Feature Collection
+- Properties will be available for filtering and display
+
+### CSV (Points)
+- Must include coordinate columns with one of these naming patterns:
+  - Latitude: `lat`, `latitude`, or `y`
+  - Longitude: `lng`, `long`, `longitude`, or `x`
+- Additional columns will be available as properties
+
+### CSV (H3 Hexagons)
+- Must include an H3 index column with one of these names:
+  - `hex_id`, `h3_index`, `h3`, or `hexagon`
+- H3 indices must be valid H3 cell addresses
+- Additional columns will be available as properties
 
 ## Usage
 1. Clone the repository.

@@ -17,8 +17,9 @@ interface FilterModalProps {
   onClose: () => void;
   data: any[];
   onApplyFilter: (filter: (item: any) => boolean, filterInfo: FilterInfo) => void;
-  activeFilters?: FilterInfo[];
-  onRemoveFilter?: (index: number) => void;
+  activeFilters: FilterInfo[];
+  onRemoveFilter: (index: number) => void;
+  layerType?: 'geojson' | 'point' | 'h3';
 }
 
 interface ColumnInfo {
@@ -32,8 +33,9 @@ export const FilterModal: React.FC<FilterModalProps> = ({
   onClose, 
   data, 
   onApplyFilter,
-  activeFilters = [],
-  onRemoveFilter
+  activeFilters,
+  onRemoveFilter,
+  layerType
 }) => {
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [selectedColumn, setSelectedColumn] = useState<string>('');
@@ -327,7 +329,7 @@ export const FilterModal: React.FC<FilterModalProps> = ({
                 <div key={index} className="flex items-center justify-between bg-gray-50 px-3 py-2 rounded-lg">
                   <span className="text-sm text-gray-600">{formatFilterDescription(filter)}</span>
                   <button
-                    onClick={() => onRemoveFilter?.(index)}
+                    onClick={() => onRemoveFilter(index)}
                     className="text-gray-400 hover:text-gray-500"
                   >
                     <XMarkIcon className="h-4 w-4" />
