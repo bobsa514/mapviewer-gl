@@ -1,10 +1,10 @@
-import GeospatialViewer from './components/GeospatialViewer'
+import MapViewerGL from './components/MapViewerGL'
 import './App.css'
 
 function App() {
   return (
     <div className="w-screen h-screen overflow-hidden">
-      <GeospatialViewer />
+      <MapViewerGL />
     </div>
   )
 }

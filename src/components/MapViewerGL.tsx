@@ -65,7 +65,7 @@ interface HoverInfo {
   data: any;
 }
 
-const GeospatialViewer: React.FC = () => {
+const MapViewerGL: React.FC = () => {
   const [layers, setLayers] = useState<LayerInfo[]>([]);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
   const [hoveredFeature, setHoveredFeature] = useState<Feature | null>(null);
@@ -1532,4 +1532,4 @@ const GeospatialViewer: React.FC = () => {
   );
 };
 
-export default GeospatialViewer; 
+export default MapViewerGL; 

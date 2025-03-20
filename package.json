@@ -1,5 +1,5 @@
 {
-  "name": "geospatial-viewer",
+  "name": "mapviewer-gl",
   "private": true,
   "version": "0.0.0",
   "type": "module",
