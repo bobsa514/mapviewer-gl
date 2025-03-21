@@ -44,6 +44,27 @@ interface LayerInfo {
   h3Column?: string;
 }
 
+interface MapConfiguration {
+  version: string;
+  viewState: MapViewState;
+  basemap: string;
+  layers: Array<{
+    name: string;
+    type: 'geojson' | 'point' | 'h3';
+    visible: boolean;
+    color: string;
+    opacity: number;
+    pointSize?: number;
+    columns?: {
+      lat: string;
+      lng: string;
+    };
+    data: any;
+    filters?: Array<FilterInfo>;
+    selectedProperties?: string[];
+  }>;
+}
+
 interface CSVPreviewData {
   headers: string[];
   rows: string[][];
@@ -278,7 +299,15 @@ const MapViewerGL: React.FC = () => {
 
   const handleCSVPreview = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      // Reset preview if no file is selected
+      setCsvPreview(null);
+      return;
+    }
+
+    // Reset any existing previews
+    setGeoJSONPreview(null);
+    setCsvPreview(null);
 
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -364,6 +393,11 @@ const MapViewerGL: React.FC = () => {
       } catch (error) {
         console.error('Error parsing CSV:', error);
         alert(error instanceof Error ? error.message : 'Error parsing CSV file');
+        // Reset on error
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+        setCsvPreview(null);
       }
     };
     reader.readAsText(file);
@@ -974,6 +1008,165 @@ const MapViewerGL: React.FC = () => {
       });
   };
 
+  const exportConfiguration = () => {
+    const config: MapConfiguration = {
+      version: "1.0.0",
+      viewState,
+      basemap: mapStyle,
+      layers: layers.map(layer => ({
+        name: layer.name,
+        type: layer.type,
+        visible: layer.visible,
+        color: layer.color,
+        opacity: layer.opacity,
+        pointSize: layer.pointSize,
+        columns: layer.columns,
+        data: layer.data,
+        filters: activeFilters[layer.id]?.map(filter => filter.info),
+        selectedProperties: layer.type === 'geojson' 
+          ? Object.keys(layer.data.features[0]?.properties || {})
+          : Object.keys(layer.data[0]?.properties || {})
+      }))
+    };
+
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'map-configuration.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleConfigFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      importConfiguration(file).then(() => {
+        // Reset the file input after successful import
+        if (event.target) {
+          event.target.value = '';
+        }
+      });
+    }
+  };
+
+  const importConfiguration = async (file: File) => {
+    try {
+      const text = await file.text();
+      const config: MapConfiguration = JSON.parse(text);
+
+      // Validate version
+      if (!config.version) {
+        throw new Error('Invalid configuration file');
+      }
+
+      // Reset current state
+      setLayers([]);
+      setActiveFilters({});
+      setSelectedFeature(null);
+      setSelectedColumns([]);
+
+      // Set view state
+      setViewState(config.viewState);
+
+      // Set basemap
+      setMapStyle(config.basemap);
+
+      // Import filters first so they can be applied to the layers
+      const newFilters: {[layerId: number]: { fn: (item: any) => boolean, info: FilterInfo }[]} = {};
+      config.layers.forEach((layerConfig, index) => {
+        if (layerConfig.filters && layerConfig.filters.length > 0) {
+          newFilters[index] = layerConfig.filters.map(filterInfo => ({
+            fn: (item: any) => {
+              const value = item.properties?.[filterInfo.column];
+              if (filterInfo.type === 'numeric') {
+                const numValue = parseFloat(value);
+                if (filterInfo.value.type === 'range') {
+                  return numValue >= filterInfo.value.min && numValue <= filterInfo.value.max;
+                } else if (filterInfo.value.type === 'comparison') {
+                  const compValue = parseFloat(String(filterInfo.value.value));
+                  switch (filterInfo.value.operator) {
+                    case '<': return numValue < compValue;
+                    case '<=': return numValue <= compValue;
+                    case '>': return numValue > compValue;
+                    case '>=': return numValue >= compValue;
+                    case '=': return numValue === compValue;
+                    default: return true;
+                  }
+                }
+              } else if (filterInfo.type === 'text') {
+                const strValue = String(value).toLowerCase();
+                if (filterInfo.value.type === 'multiple') {
+                  return filterInfo.value.values.some(v => 
+                    strValue.includes(v.toLowerCase())
+                  );
+                } else if (filterInfo.value.type === 'comparison') {
+                  const compValue = String(filterInfo.value.value).toLowerCase();
+                  switch (filterInfo.value.operator) {
+                    case '=': return strValue === compValue;
+                    case '<': return strValue < compValue;
+                    case '<=': return strValue <= compValue;
+                    case '>': return strValue > compValue;
+                    case '>=': return strValue >= compValue;
+                    default: return true;
+                  }
+                }
+              }
+              return true;
+            },
+            info: filterInfo
+          }));
+        }
+      });
+      setActiveFilters(newFilters);
+
+      // Import and filter layers
+      const newLayers = config.layers.map((layerConfig, index) => {
+        // Apply filters to the data
+        let filteredData = layerConfig.data;
+        if (newFilters[index]) {
+          if (layerConfig.type === 'geojson') {
+            filteredData = {
+              ...layerConfig.data,
+              features: layerConfig.data.features.filter((feature: Feature) => 
+                newFilters[index].every(filter => filter.fn(feature))
+              )
+            };
+          } else if (layerConfig.type === 'point') {
+            filteredData = layerConfig.data.filter((point: { properties: any }) => 
+              newFilters[index].every(filter => filter.fn(point))
+            );
+          } else if (layerConfig.type === 'h3') {
+            filteredData = layerConfig.data.filter((hex: { properties: any }) => 
+              newFilters[index].every(filter => filter.fn({ properties: hex.properties }))
+            );
+          }
+        }
+
+        return {
+          id: index,
+          name: layerConfig.name,
+          type: layerConfig.type,
+          visible: layerConfig.visible,
+          color: layerConfig.color,
+          opacity: layerConfig.opacity,
+          pointSize: layerConfig.pointSize,
+          columns: layerConfig.columns,
+          data: filteredData,
+          isExpanded: false
+        };
+      });
+
+      setLayers(newLayers);
+
+    } catch (error) {
+      console.error('Error importing configuration:', error);
+      alert('Error importing configuration file');
+    }
+  };
+
   return (
     <div className="fixed inset-0">
       <div className="absolute top-4 left-4 z-10">
@@ -995,9 +1188,14 @@ const MapViewerGL: React.FC = () => {
                     Upload GeoJSON
                   </label>
                   <input
+                    key="geojson-input"
                     type="file"
                     accept=".json,.geojson"
                     onChange={handleFileUpload}
+                    onClick={(e) => {
+                      // Reset the file input value when clicking
+                      (e.target as HTMLInputElement).value = '';
+                    }}
                     disabled={isLoading}
                     className="block w-full text-sm text-gray-500
                       file:mr-4 file:py-2 file:px-4
@@ -1013,10 +1211,15 @@ const MapViewerGL: React.FC = () => {
                     Upload CSV
                   </label>
                   <input
+                    key="csv-input"
                     type="file"
                     accept=".csv"
                     ref={fileInputRef}
                     onChange={handleCSVPreview}
+                    onClick={(e) => {
+                      // Reset the file input value when clicking
+                      (e.target as HTMLInputElement).value = '';
+                    }}
                     disabled={isLoading}
                     className="block w-full text-sm text-gray-500
                       file:mr-4 file:py-2 file:px-4
@@ -1039,6 +1242,46 @@ const MapViewerGL: React.FC = () => {
                     </ul>
                   </div>
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2 text-left">
+                    Import Map Configuration
+                  </label>
+                  <input
+                    key="config-input"
+                    type="file"
+                    accept=".json"
+                    onChange={handleConfigFileUpload}
+                    onClick={(e) => {
+                      // Reset the file input value when clicking
+                      (e.target as HTMLInputElement).value = '';
+                    }}
+                    disabled={isLoading}
+                    className="block w-full text-sm text-gray-500
+                      file:mr-4 file:py-2 file:px-4
+                      file:rounded-md file:border-0
+                      file:text-sm file:font-semibold
+                      file:bg-blue-50 file:text-blue-700
+                      hover:file:bg-blue-100
+                      disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                  <div className="mt-2 text-xs text-gray-500 space-y-1 text-left">
+                    <p>Accepts only JSON configuration files previously exported from this tool.</p>
+                    <p>Configuration includes:</p>
+                    <ul className="list-disc list-inside ml-2">
+                      <li>Layer settings and data</li>
+                      <li>Map view state</li>
+                      <li>Basemap selection</li>
+                      <li>Filter configurations</li>
+                    </ul>
+                  </div>
+                </div>
+                <button
+                  onClick={exportConfiguration}
+                  disabled={layers.length === 0}
+                  className="w-full px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Export Current Configuration
+                </button>
               </div>
             </div>
           )}
