@@ -51,6 +51,11 @@ A modern web-based map viewer that supports multiple data formats and interactiv
   - Feature property inspection
   - Column selection for display
   - Advanced filtering options
+- 💾 Configuration Management:
+  - Export current map configuration
+  - Import saved configurations
+  - Share map configurations with others
+  - Preserves layers, styling, filters, and view state
 
 ## Data Format Requirements
 
