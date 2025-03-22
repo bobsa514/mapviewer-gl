@@ -34,6 +34,8 @@
     "react-map-gl": "^7.1.6"
   },
   "devDependencies": {
+    "@types/d3-interpolate": "^3.0.4",
+    "@types/d3-scale": "^4.0.9",
     "@types/geojson": "^7946.0.14",
     "@types/node": "^20.11.19",
     "@types/react": "^18.2.55",
