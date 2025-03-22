@@ -18,6 +18,8 @@ import {
 import { FilterModal, FilterInfo } from './FilterModal';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
 import * as h3 from 'h3-js';
+import { scaleQuantile } from 'd3-scale';
+import { interpolateRgb } from 'd3-interpolate';
 
 // Initial viewport state (USA view)
 const INITIAL_VIEW_STATE: MapViewState = {
@@ -26,20 +28,47 @@ const INITIAL_VIEW_STATE: MapViewState = {
   zoom: 3,
 };
 
+// Move colorScales definition before LayerInfo interface
+type ColorScaleName = 'Reds' | 'Blues' | 'Greens' | 'Greys' | 'YlGnBu' | 'YlOrRd' | 'PuBuGn' | 'RdPu';
+
+const colorScales: Record<ColorScaleName, string[]> = {
+  Reds: ['#fee5d9', '#fcae91', '#fb6a4a', '#de2d26', '#a50f15'],
+  Blues: ['#eff3ff', '#bdd7e7', '#6baed6', '#3182bd', '#08519c'],
+  Greens: ['#edf8e9', '#bae4b3', '#74c476', '#31a354', '#006d2c'],
+  Greys: ['#f7f7f7', '#cccccc', '#969696', '#636363', '#252525'],
+  YlGnBu: ['#ffffd9', '#c7e9b4', '#7fcdbb', '#41b6c4', '#225ea8'],
+  YlOrRd: ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026'],
+  PuBuGn: ['#f6eff7', '#bdc9e1', '#67a9cf', '#1c9099', '#016c59'],
+  RdPu: ['#feebe2', '#fbb4b9', '#f768a1', '#c51b8a', '#7a0177']
+};
+
 interface LayerInfo {
   id: number;
   name: string;
+  type: 'geojson' | 'point' | 'h3';
+  data: any;
   visible: boolean;
-  data: FeatureCollection | any; // Allow any for CSV data
+  colorMapping?: {
+    column: string;
+    numClasses: number;
+    breaks: number[];
+    colorScale: ColorScaleName;
+  };
+  sizeMapping?: {
+    column: string;
+    numClasses: number;
+    breaks: number[];
+    minSize: number;
+    maxSize: number;
+  };
   color: string;
   opacity: number;
-  type: 'geojson' | 'point' | 'h3'; // Updated type to distinguish between point and h3
   columns?: {
     lat: string;
     lng: string;
   };
-  pointSize?: number; // Now represents pixel size
-  isExpanded?: boolean; // Add expanded state for symbology controls
+  pointSize?: number;
+  isExpanded?: boolean;
   isH3Data?: boolean;
   h3Column?: string;
 }
@@ -85,6 +114,108 @@ interface HoverInfo {
   y: number;
   data: any;
 }
+
+// Color scale preview component
+const ColorScalePreview: React.FC<{ scale: ColorScaleName }> = ({ scale }) => {
+  const colors = colorScales[scale];
+  return (
+    <div className="flex h-4">
+      {colors.map((color, i) => (
+        <div key={i} className="flex-1" style={{ backgroundColor: color }} />
+      ))}
+    </div>
+  );
+};
+
+// Update the color scale dropdown in the layer controls
+const renderColorScaleDropdown = (layer: LayerInfo, updateLayerColorMapping: (layerId: number, colorMapping: NonNullable<LayerInfo['colorMapping']>) => void) => (
+  <div>
+    <span className="text-xs text-gray-500">Color Scale</span>
+    <div className="relative">
+      <select
+        className="mt-1 block w-full rounded-md border-gray-300 py-1 pl-2 pr-8 text-xs"
+        value={layer.colorMapping?.colorScale || 'YlOrRd'}
+        onChange={(e) => {
+          const colorScale = e.target.value as ColorScaleName;
+          const column = layer.colorMapping?.column || '';
+          if (column) {
+            updateLayerColorMapping(layer.id, {
+              column,
+              numClasses: layer.colorMapping?.numClasses || 5,
+              breaks: [],
+              colorScale: colorScale
+            });
+          }
+        }}
+      >
+        <optgroup label="Single-hue">
+          {(['Reds', 'Blues', 'Greens', 'Greys'] as const).map(scale => (
+            <option key={scale} value={scale}>
+              {scale}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="Multi-hue">
+          {(['YlGnBu', 'YlOrRd', 'PuBuGn', 'RdPu'] as const).map(scale => (
+            <option key={scale} value={scale}>
+              {scale}
+            </option>
+          ))}
+        </optgroup>
+      </select>
+      {layer.colorMapping && (
+        <div className="absolute left-0 right-0 top-full mt-1 bg-white border rounded-md shadow-lg z-10">
+          <ColorScalePreview scale={layer.colorMapping.colorScale} />
+        </div>
+      )}
+    </div>
+  </div>
+);
+
+// Move SizeLegend component to the same level as ColorLegend
+const SizeLegend: React.FC<{ layer: LayerInfo }> = ({ layer }) => {
+  if (!layer.sizeMapping?.breaks.length) return null;
+
+  const getSizeForLegend = (index: number): number => {
+    if (!layer.sizeMapping) return 0;
+    const fraction = index / (layer.sizeMapping.numClasses - 1);
+    return layer.sizeMapping.minSize + (layer.sizeMapping.maxSize - layer.sizeMapping.minSize) * fraction;
+  };
+
+  return (
+    <div className="bg-white rounded-lg shadow-lg p-2 mb-2">
+      <div className="text-xs font-medium mb-2">{layer.sizeMapping.column}</div>
+      <div className="flex space-x-2">
+        {/* Size circles */}
+        <div className="w-6 h-32 relative">
+          {Array.from({ length: layer.sizeMapping.numClasses }).map((_, i) => {
+            const size = getSizeForLegend(i);
+            return (
+              <div
+                key={i}
+                className="absolute left-1/2 transform -translate-x-1/2"
+                style={{
+                  bottom: `${(i / (layer.sizeMapping!.numClasses - 1)) * 100}%`,
+                  width: `${size * 2}px`,
+                  height: `${size * 2}px`,
+                  borderRadius: '50%',
+                  backgroundColor: layer.color,
+                  opacity: layer.opacity
+                }}
+              />
+            );
+          })}
+        </div>
+        {/* Value labels */}
+        <div className="flex flex-col justify-between py-1 text-xs">
+          <span>{layer.sizeMapping.breaks[layer.sizeMapping.breaks.length - 1]?.toFixed(1)}</span>
+          <span>{layer.sizeMapping.breaks[Math.floor(layer.sizeMapping.breaks.length / 2)]?.toFixed(1)}</span>
+          <span>{layer.sizeMapping.breaks[0]?.toFixed(1)}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const MapViewerGL: React.FC = () => {
   const [layers, setLayers] = useState<LayerInfo[]>([]);
@@ -835,25 +966,158 @@ const MapViewerGL: React.FC = () => {
     return data.filter(item => layerFilters.every(filter => filter.fn(item)));
   };
 
+  const getNumericValuesForColumn = (layer: LayerInfo, column: string): number[] => {
+    const getValue = (properties: { [key: string]: any } | null | undefined): number => {
+      const value = properties?.[column];
+      // Handle null/empty values as 0
+      if (value === null || value === undefined || value === '') return 0;
+      // Handle string numbers
+      if (typeof value === 'string') {
+        const parsed = parseFloat(value);
+        return isNaN(parsed) ? 0 : parsed;
+      }
+      return typeof value === 'number' ? value : 0;
+    };
+
+    // Get filtered data first
+    let filteredData;
+    if (layer.type === 'geojson') {
+      filteredData = activeFilters[layer.id]?.length > 0
+        ? layer.data.features.filter((item: Feature) => activeFilters[layer.id].every(filter => filter.fn(item)))
+        : layer.data.features;
+      return filteredData.map((f: Feature) => getValue(f.properties));
+    } else if (layer.type === 'point') {
+      filteredData = activeFilters[layer.id]?.length > 0
+        ? layer.data.filter((item: { properties: { [key: string]: any } }) => activeFilters[layer.id].every(filter => filter.fn(item)))
+        : layer.data;
+      return filteredData.map((d: { properties: { [key: string]: any } }) => getValue(d.properties));
+    } else if (layer.type === 'h3') {
+      filteredData = activeFilters[layer.id]?.length > 0
+        ? layer.data.filter((item: { properties: { [key: string]: any } }) => activeFilters[layer.id].every(filter => filter.fn({ properties: item.properties })))
+        : layer.data;
+      return filteredData.map((d: { properties: { [key: string]: any } }) => getValue(d.properties));
+    }
+    return [];
+  };
+
+  const getColorForValue = (value: number, baseColor: string, colorMapping: NonNullable<LayerInfo['colorMapping']>): [number, number, number] => {
+    if (!colorMapping.breaks.length) return hexToRGB(baseColor);
+
+    // Find the appropriate color based on value's position in breaks
+    let colorIndex = colorMapping.numClasses - 1; // Default to last color
+    for (let i = 0; i < colorMapping.breaks.length; i++) {
+      if (value <= colorMapping.breaks[i]) {
+        colorIndex = i;
+        break;
+      }
+    }
+
+    // Get color from the selected color scale
+    const colors = colorScales[colorMapping.colorScale];
+    const color = colors[colorIndex];
+
+    // Parse the color string to RGB values
+    return hexToRGB(color);
+  };
+
+  // Add color cache
+  const colorCache = useRef<{[key: string]: [number, number, number, number]}>({});
+  const sizeCache = useRef<{[key: string]: number}>({});
+
+  const updateLayerColorMapping = (layerId: number, colorMapping: LayerInfo['colorMapping']) => {
+    setLayers(layers.map(layer => {
+      if (layer.id === layerId && colorMapping) {
+        // Calculate breaks if we have a column selected
+        if (colorMapping.column) {
+          const values = getNumericValuesForColumn(layer, colorMapping.column);
+          
+          // Convert all values to numbers and sort them
+          const numericValues = values
+            .map(v => typeof v === 'string' ? parseFloat(v) : v)
+            .filter(v => !isNaN(v))
+            .sort((a, b) => a - b);
+          
+          // Calculate quantile breaks
+          const breaks = [];
+          for (let i = 1; i < colorMapping.numClasses; i++) {
+            const index = Math.floor((i / colorMapping.numClasses) * numericValues.length);
+            breaks.push(numericValues[index]);
+          }
+          
+          colorMapping.breaks = breaks;
+          // Ensure we have a valid color scale
+          colorMapping.colorScale = colorMapping.colorScale || 'YlOrRd';
+        }
+
+        // Force a re-render by creating a new layer object
+        return { ...layer, colorMapping: { ...colorMapping } };
+      }
+      return layer;
+    }));
+  };
+
   const renderLayers = () => {
+    // Clear caches when layers change
+    colorCache.current = {};
+    sizeCache.current = {};
+
+    const getGeometryKey = (geometry: Geometry): string => {
+      if ('coordinates' in geometry) {
+        return JSON.stringify(geometry.coordinates);
+      }
+      if (geometry.type === 'GeometryCollection') {
+        return JSON.stringify(geometry.geometries.map(g => getGeometryKey(g)));
+      }
+      return '';
+    };
+
     return layers
       .filter(layer => layer.visible)
       .map((layer: LayerInfo) => {
         const [r, g, b] = hexToRGB(layer.color);
         
         if (layer.type === 'h3') {
+          // Filter H3 data if there are active filters
+          const filteredData = activeFilters[layer.id]?.length > 0
+            ? layer.data.filter((item: any) => activeFilters[layer.id].every(filter => filter.fn({ properties: item.properties })))
+            : layer.data;
+
           return new H3HexagonLayer({
             id: `h3-layer-${layer.id}`,
-            data: layer.data,
+            data: filteredData,
             pickable: true,
             wireframe: true,
             filled: true,
             extruded: false,
             getHexagon: d => d.hex,
-            getFillColor: [r, g, b, Math.round(layer.opacity * 255)],
+            getFillColor: d => {
+              const cacheKey = `${layer.id}-${d.hex}`;
+              if (colorCache.current[cacheKey]) {
+                return colorCache.current[cacheKey];
+              }
+
+              let color: [number, number, number, number];
+              if (layer.colorMapping?.column) {
+                const value = d.properties[layer.colorMapping.column];
+                const numericValue = typeof value === 'string' ? parseFloat(value) : value;
+                if (!isNaN(numericValue)) {
+                  const [r, g, b] = getColorForValue(numericValue, layer.color, layer.colorMapping);
+                  color = [r, g, b, Math.round(layer.opacity * 255)];
+                } else {
+                  color = [r, g, b, Math.round(layer.opacity * 255)];
+                }
+              } else {
+                color = [r, g, b, Math.round(layer.opacity * 255)];
+              }
+              colorCache.current[cacheKey] = color;
+              return color;
+            },
             getLineColor: [255, 255, 255],
             lineWidthMinPixels: 1,
             opacity: layer.opacity,
+            updateTriggers: {
+              getFillColor: [layer.id, layer.color, layer.opacity, layer.colorMapping?.column, layer.colorMapping?.breaks.join(',')]
+            },
             onClick: (info: any) => {
               if (info.object) {
                 const hexBoundary = h3.cellToBoundary(info.object.hex);
@@ -902,22 +1166,76 @@ const MapViewerGL: React.FC = () => {
             id: `point-layer-${layer.id}`,
             data: filteredData,
             getPosition: (d: any) => d.position,
-            getFillColor: [r, g, b, Math.round(layer.opacity * 255)],
-            getRadius: (d: any) => {
+            getFillColor: d => {
+              const cacheKey = `${layer.id}-${d.position.join(',')}`;
+              if (colorCache.current[cacheKey]) {
+                return colorCache.current[cacheKey];
+              }
+
+              let color: [number, number, number, number];
+              if (layer.colorMapping?.column) {
+                const value = d.properties[layer.colorMapping.column];
+                const numericValue = typeof value === 'string' ? parseFloat(value) : value;
+                if (!isNaN(numericValue)) {
+                  const [r, g, b] = getColorForValue(numericValue, layer.color, layer.colorMapping);
+                  color = [r, g, b, Math.round(layer.opacity * 255)];
+                } else {
+                  color = [r, g, b, Math.round(layer.opacity * 255)];
+                }
+              } else {
+                color = [r, g, b, Math.round(layer.opacity * 255)];
+              }
+              colorCache.current[cacheKey] = color;
+              return color;
+            },
+            getRadius: d => {
+              const cacheKey = `size-${layer.id}-${d.position.join(',')}`;
+              if (sizeCache.current[cacheKey]) {
+                return sizeCache.current[cacheKey];
+              }
+
+              let size: number;
+              if (layer.sizeMapping?.column) {
+                const value = d.properties[layer.sizeMapping.column];
+                const numericValue = typeof value === 'string' ? parseFloat(value) : value;
+                if (!isNaN(numericValue)) {
+                  size = getSizeForValue(numericValue, layer.sizeMapping);
+                } else {
+                  size = layer.pointSize || 5;
+                }
+              } else {
+                size = layer.pointSize || 5;
+              }
+
               if (selectedFeature && 
                   selectedFeature.geometry.type === 'Point' &&
                   JSON.stringify(selectedFeature.geometry.coordinates) === JSON.stringify(d.position)) {
-                return (layer.pointSize || 5) * 2;
+                size *= 2;
               }
-              return layer.pointSize || 5;
+
+              sizeCache.current[cacheKey] = size;
+              return size;
             },
             radiusScale: 1,
             radiusUnits: "pixels",
             radiusMinPixels: 1,
-            radiusMaxPixels: 20,
+            radiusMaxPixels: 50,
             pickable: true,
             updateTriggers: {
-              getRadius: [selectedFeature, layer.pointSize]
+              getRadius: [
+                layer.id,
+                selectedFeature?.geometry.type === 'Point' ? JSON.stringify(selectedFeature.geometry.coordinates) : null,
+                layer.pointSize,
+                layer.sizeMapping?.column,
+                layer.sizeMapping?.breaks.join(',')
+              ],
+              getFillColor: [
+                layer.id,
+                layer.color,
+                layer.opacity,
+                layer.colorMapping?.column,
+                layer.colorMapping?.breaks.join(',')
+              ]
             },
             onClick: (info: any) => {
               if (info.object) {
@@ -975,16 +1293,38 @@ const MapViewerGL: React.FC = () => {
           lineWidthUnits: "pixels",
           lineWidthMinPixels: 1,
           getFillColor: (d: Feature) => {
-            if (selectedFeature && areFeaturesEqual(d, selectedFeature)) {
-              return [r, g, b, Math.round(layer.opacity * 255)];
+            const cacheKey = `${layer.id}-${getGeometryKey(d.geometry)}`;
+            if (colorCache.current[cacheKey]) {
+              return colorCache.current[cacheKey];
             }
-            return [r, g, b, Math.round(layer.opacity * 128)];
+
+            let color: [number, number, number, number];
+            if (layer.colorMapping?.column) {
+              const value = d.properties?.[layer.colorMapping.column];
+              if (typeof value === 'number') {
+                const [r, g, b] = getColorForValue(value, layer.color, layer.colorMapping);
+                color = [r, g, b, Math.round(layer.opacity * (selectedFeature && areFeaturesEqual(d, selectedFeature) ? 255 : 128))];
+              } else {
+                color = [r, g, b, Math.round(layer.opacity * (selectedFeature && areFeaturesEqual(d, selectedFeature) ? 255 : 128))];
+              }
+            } else {
+              color = [r, g, b, Math.round(layer.opacity * (selectedFeature && areFeaturesEqual(d, selectedFeature) ? 255 : 128))];
+            }
+            colorCache.current[cacheKey] = color;
+            return color;
           },
           getLineColor: [r, g, b, 255],
           pickable: true,
           updateTriggers: {
-            getFillColor: [layer.color, layer.opacity, selectedFeature],
-            lineWidthMinPixels: [selectedFeature]
+            getFillColor: [
+              layer.id,
+              layer.color,
+              layer.opacity,
+              selectedFeature ? getGeometryKey(selectedFeature.geometry) : null,
+              layer.colorMapping?.column,
+              layer.colorMapping?.breaks.join(',')
+            ],
+            lineWidthMinPixels: [selectedFeature ? getGeometryKey(selectedFeature.geometry) : null]
           },
           onClick: (info: any) => {
             if (info.object) {
@@ -1165,6 +1505,168 @@ const MapViewerGL: React.FC = () => {
       console.error('Error importing configuration:', error);
       alert('Error importing configuration file');
     }
+  };
+
+  // Add back the ColorLegend component
+  const ColorLegend: React.FC<{ layer: LayerInfo }> = ({ layer }) => {
+    if (!layer.colorMapping?.breaks.length) return null;
+
+    const getColorForLegend = (index: number): string => {
+      if (!layer.colorMapping) return '';
+      return colorScales[layer.colorMapping.colorScale][index];
+    };
+
+    return (
+      <div className="bg-white rounded-lg shadow-lg p-2 mb-2">
+        <div className="text-xs font-medium mb-2">{layer.colorMapping.column}</div>
+        <div className="flex space-x-2">
+          {/* Vertical color bars */}
+          <div className="w-6 h-32">
+            <div className="h-full flex flex-col">
+              {Array.from({ length: layer.colorMapping.numClasses }).map((_, i) => (
+                <div
+                  key={i}
+                  className="flex-1"
+                  style={{ backgroundColor: getColorForLegend(i) }}
+                />
+              ))}
+            </div>
+          </div>
+          {/* Value labels */}
+          <div className="flex flex-col justify-between py-1 text-xs">
+            <span>{layer.colorMapping.breaks[layer.colorMapping.breaks.length - 1]?.toFixed(1)}</span>
+            <span>{layer.colorMapping.breaks[Math.floor(layer.colorMapping.breaks.length / 2)]?.toFixed(1)}</span>
+            <span>{layer.colorMapping.breaks[0]?.toFixed(1)}</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const clearLayerColorMapping = (layerId: number) => {
+    setLayers(layers.map(layer => 
+      layer.id === layerId ? { ...layer, colorMapping: undefined } : layer
+    ));
+  };
+
+  const getNumericColumns = (layer: LayerInfo): string[] => {
+    const isNumeric = (value: any): boolean => {
+      if (value === null || value === undefined || value === '') return false;
+      if (typeof value === 'string') {
+        const parsed = parseFloat(value);
+        return !isNaN(parsed);
+      }
+      return typeof value === 'number' && !isNaN(value);
+    };
+
+    const hasNumericValues = (values: any[]): boolean => {
+      const nonNullValues = values.filter(v => v !== null && v !== undefined && v !== '');
+      if (nonNullValues.length === 0) return false;
+      const numericCount = nonNullValues.filter(isNumeric).length;
+      return numericCount / nonNullValues.length >= 0.5;
+    };
+
+    if (layer.type === 'geojson' && layer.data.features.length > 0) {
+      const propertyValues: { [key: string]: any[] } = {};
+      layer.data.features.forEach((feature: Feature) => {
+        if (feature.properties) {
+          Object.entries(feature.properties).forEach(([key, value]) => {
+            if (!propertyValues[key]) propertyValues[key] = [];
+            propertyValues[key].push(value);
+          });
+        }
+      });
+      
+      return Object.entries(propertyValues)
+        .filter(([_, values]) => hasNumericValues(values))
+        .map(([key]) => key);
+    } else if (layer.type === 'point' && layer.data.length > 0) {
+      const propertyValues: { [key: string]: any[] } = {};
+      layer.data.forEach((point: { properties: { [key: string]: any } }) => {
+        if (point.properties) {
+          Object.entries(point.properties).forEach(([key, value]) => {
+            if (!propertyValues[key]) propertyValues[key] = [];
+            propertyValues[key].push(value);
+          });
+        }
+      });
+      
+      return Object.entries(propertyValues)
+        .filter(([_, values]) => hasNumericValues(values))
+        .map(([key]) => key);
+    } else if (layer.type === 'h3' && layer.data.length > 0) {
+      const propertyValues: { [key: string]: any[] } = {};
+      layer.data.forEach((hex: { properties: { [key: string]: any } }) => {
+        if (hex.properties) {
+          Object.entries(hex.properties).forEach(([key, value]) => {
+            if (!propertyValues[key]) propertyValues[key] = [];
+            propertyValues[key].push(value);
+          });
+        }
+      });
+      
+      return Object.entries(propertyValues)
+        .filter(([_, values]) => hasNumericValues(values))
+        .map(([key]) => key);
+    }
+    return [];
+  };
+
+  const updateLayerSizeMapping = (layerId: number, sizeMapping: LayerInfo['sizeMapping']) => {
+    setLayers(layers.map(layer => {
+      if (layer.id === layerId && sizeMapping) {
+        // Calculate breaks if we have a column selected
+        if (sizeMapping.column) {
+          const values = getNumericValuesForColumn(layer, sizeMapping.column);
+          
+          // Convert all values to numbers and sort them
+          const numericValues = values
+            .map(v => typeof v === 'string' ? parseFloat(v) : v)
+            .filter(v => !isNaN(v))
+            .sort((a, b) => a - b);
+          
+          // Calculate quantile breaks
+          const breaks = [];
+          for (let i = 1; i < sizeMapping.numClasses; i++) {
+            const index = Math.floor((i / sizeMapping.numClasses) * numericValues.length);
+            breaks.push(numericValues[index]);
+          }
+          
+          sizeMapping.breaks = breaks;
+        }
+
+        // Force a re-render by creating a new layer object
+        return { ...layer, sizeMapping: { ...sizeMapping } };
+      }
+      return layer;
+    }));
+  };
+
+  const clearLayerSizeMapping = (layerId: number) => {
+    setLayers(layers.map(layer => 
+      layer.id === layerId ? { ...layer, sizeMapping: undefined } : layer
+    ));
+  };
+
+  const getSizeForValue = (value: number, sizeMapping: NonNullable<LayerInfo['sizeMapping']>): number => {
+    if (!sizeMapping.breaks.length) return sizeMapping.minSize;
+
+    // Find the appropriate size based on value's position in breaks
+    let sizeIndex = 0;
+    for (let i = 0; i < sizeMapping.breaks.length; i++) {
+      if (value <= sizeMapping.breaks[i]) {
+        sizeIndex = i;
+        break;
+      }
+    }
+    // If value is greater than all breaks, use the maximum size
+    if (sizeIndex === 0 && value > sizeMapping.breaks[sizeMapping.breaks.length - 1]) {
+      sizeIndex = sizeMapping.numClasses - 1;
+    }
+
+    // Interpolate between min and max size
+    const sizeFraction = sizeIndex / (sizeMapping.numClasses - 1);
+    return sizeMapping.minSize + (sizeMapping.maxSize - sizeMapping.minSize) * sizeFraction;
   };
 
   return (
@@ -1419,6 +1921,60 @@ const MapViewerGL: React.FC = () => {
                       />
                     </div>
                     <div className="space-y-1">
+                      <span className="text-xs text-gray-500">Color Based On</span>
+                      <select
+                        className="mt-1 block w-full rounded-md border-gray-300 py-1 pl-2 pr-8 text-xs"
+                        value={layer.colorMapping?.column || ''}
+                        onChange={(e) => {
+                          const column = e.target.value;
+                          if (column) {
+                            updateLayerColorMapping(layer.id, {
+                              column,
+                              numClasses: layer.colorMapping?.numClasses || 5,
+                              breaks: [],
+                              colorScale: 'YlOrRd'  // Always use YlOrRd as default
+                            });
+                          } else {
+                            clearLayerColorMapping(layer.id);
+                          }
+                        }}
+                      >
+                        <option value="">None</option>
+                        {getNumericColumns(layer).map(column => (
+                          <option key={column} value={column}>{column}</option>
+                        ))}
+                      </select>
+                      {layer.colorMapping && (
+                        <div className="space-y-2 mt-2">
+                          <div>
+                            {renderColorScaleDropdown(layer, updateLayerColorMapping)}
+                          </div>
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-gray-500">Number of Classes</span>
+                              <span className="text-xs text-gray-600">{layer.colorMapping.numClasses}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="3"
+                              max="10"
+                              step="1"
+                              value={layer.colorMapping.numClasses}
+                              onChange={(e) => {
+                                const numClasses = parseInt(e.target.value);
+                                updateLayerColorMapping(layer.id, {
+                                  ...layer.colorMapping!,
+                                  numClasses,
+                                  breaks: []
+                                });
+                              }}
+                              className="w-full"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-gray-500">Opacity</span>
                         <span className="text-xs text-gray-600">{Math.round(layer.opacity * 100)}%</span>
@@ -1434,23 +1990,135 @@ const MapViewerGL: React.FC = () => {
                       />
                     </div>
                     {layer.type === 'point' && (
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-gray-500">Point Size</span>
-                          <span className="text-xs text-gray-600">{layer.pointSize || 5}px</span>
+                      <div className="space-y-2">
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-gray-500">Point Size</span>
+                            <span className="text-xs text-gray-600">{layer.pointSize || 5}px</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="1"
+                            max="20"
+                            step="1"
+                            value={layer.pointSize || 5}
+                            onChange={(e) => {
+                              const size = parseInt(e.target.value);
+                              updateLayerPointSize(layer.id, size);
+                            }}
+                            className="w-full"
+                            disabled={!!layer.sizeMapping}
+                          />
                         </div>
-                        <input
-                          type="range"
-                          min="1"
-                          max="20"
-                          step="1"
-                          value={layer.pointSize || 5}
-                          onChange={(e) => {
-                            const size = parseInt(e.target.value);
-                            updateLayerPointSize(layer.id, size);
-                          }}
-                          className="w-full"
-                        />
+                        <div className="space-y-1">
+                          <span className="text-xs text-gray-500">Size Based On</span>
+                          <select
+                            className="mt-1 block w-full rounded-md border-gray-300 py-1 pl-2 pr-8 text-xs"
+                            value={layer.sizeMapping?.column || ''}
+                            onChange={(e) => {
+                              const column = e.target.value;
+                              if (column) {
+                                updateLayerSizeMapping(layer.id, {
+                                  column,
+                                  numClasses: layer.sizeMapping?.numClasses || 5,
+                                  breaks: [],
+                                  minSize: 2,
+                                  maxSize: 10
+                                });
+                              } else {
+                                clearLayerSizeMapping(layer.id);
+                              }
+                            }}
+                          >
+                            <option value="">None</option>
+                            {getNumericColumns(layer).map(column => (
+                              <option key={column} value={column}>{column}</option>
+                            ))}
+                          </select>
+                          {layer.sizeMapping && (
+                            <div className="space-y-2 mt-2">
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs text-gray-500">Number of Classes</span>
+                                  <span className="text-xs text-gray-600">{layer.sizeMapping.numClasses}</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="3"
+                                  max="10"
+                                  step="1"
+                                  value={layer.sizeMapping.numClasses}
+                                  onChange={(e) => {
+                                    const numClasses = parseInt(e.target.value);
+                                    updateLayerSizeMapping(layer.id, {
+                                      ...layer.sizeMapping!,
+                                      numClasses,
+                                      breaks: []
+                                    });
+                                  }}
+                                  className="w-full"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs text-gray-500">Size Range (px)</span>
+                                  <span className="text-xs text-gray-600">{layer.sizeMapping.minSize}-{layer.sizeMapping.maxSize}px</span>
+                                </div>
+                                <div className="relative">
+                                  <div className="h-1 bg-gray-200 rounded-full">
+                                    <div
+                                      className="absolute h-1 bg-blue-500 rounded-full"
+                                      style={{
+                                        left: `${(layer.sizeMapping.minSize - 1) / 24 * 100}%`,
+                                        width: `${((layer.sizeMapping.maxSize - layer.sizeMapping.minSize) / 24) * 100}%`
+                                      }}
+                                    />
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min="1"
+                                    max="25"
+                                    step="1"
+                                    value={layer.sizeMapping.minSize}
+                                    onChange={(e) => {
+                                      const minSize = parseInt(e.target.value);
+                                      if (minSize <= layer.sizeMapping!.maxSize) {
+                                        updateLayerSizeMapping(layer.id, {
+                                          ...layer.sizeMapping!,
+                                          minSize,
+                                          breaks: []
+                                        });
+                                      }
+                                    }}
+                                    className="absolute top-0 left-0 w-full h-1 appearance-none bg-transparent [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-blue-500 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-20 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-blue-500 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:relative [&::-moz-range-thumb]:z-20"
+                                  />
+                                  <input
+                                    type="range"
+                                    min="1"
+                                    max="25"
+                                    step="1"
+                                    value={layer.sizeMapping.maxSize}
+                                    onChange={(e) => {
+                                      const maxSize = parseInt(e.target.value);
+                                      if (maxSize >= layer.sizeMapping!.minSize) {
+                                        updateLayerSizeMapping(layer.id, {
+                                          ...layer.sizeMapping!,
+                                          maxSize,
+                                          breaks: []
+                                        });
+                                      }
+                                    }}
+                                    className="absolute top-0 left-0 w-full h-1 appearance-none bg-transparent [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-blue-500 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-20 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-blue-500 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:relative [&::-moz-range-thumb]:z-20"
+                                  />
+                                </div>
+                                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                                  <span>1px</span>
+                                  <span>25px</span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1559,26 +2227,6 @@ const MapViewerGL: React.FC = () => {
                 strokeLinejoin="round"
                 strokeWidth={2}
                 d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-              />
-            </svg>
-          </a>
-          <a
-            href="https://github.com/bobsa514"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-gray-600 hover:text-gray-900"
-            title="GitHub Profile"
-          >
-            <svg
-              className="h-5 w-5"
-              fill="currentColor"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <path
-                fillRule="evenodd"
-                d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.91-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
-                clipRule="evenodd"
               />
             </svg>
           </a>
@@ -1771,6 +2419,19 @@ const MapViewerGL: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Add legend above basemap selector */}
+      <div className="absolute bottom-24 right-4 z-10 w-48">
+        {layers.map(layer => (
+          <React.Fragment key={layer.id}>
+            {layer.visible && layer.colorMapping && (
+              <ColorLegend layer={layer} />
+            )}
+            {layer.visible && layer.type === 'point' && layer.sizeMapping && (
+              <SizeLegend layer={layer} />
+            )}
+          </React.Fragment>
+        ))}
+      </div>
     </div>
   );
 };
