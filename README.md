@@ -75,6 +75,42 @@ A modern web-based map viewer that supports multiple data formats and interactiv
 - H3 indices must be valid H3 cell addresses
 - Additional columns will be available as properties
 
+## Setup
+
+1. Clone the repository
+```bash
+git clone https://github.com/yourusername/mapviewer-gl.git
+cd mapviewer-gl
+```
+
+2. Create a `.env` file in the root directory:
+```bash
+cp .env.example .env
+```
+
+3. Add your Mapbox token to the `.env` file:
+```bash
+VITE_MAPBOX_TOKEN=your_mapbox_token_here
+```
+
+4. Install dependencies:
+```bash
+npm install
+```
+
+5. Start the development server:
+```bash
+npm run dev
+```
+
+## Deployment
+
+The application is automatically deployed to GitHub Pages when changes are pushed to the main branch. The deployment process uses GitHub Actions and securely injects the Mapbox token from GitHub Secrets.
+
+## Environment Variables
+
+- `VITE_MAPBOX_TOKEN`: Your Mapbox GL JS access token (required)
+
 ## Usage
 1. Clone the repository.
 2. Install dependencies using `npm install`.
