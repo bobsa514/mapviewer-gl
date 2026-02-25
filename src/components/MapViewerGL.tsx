@@ -1,11 +1,9 @@
 import React, { useState, useCallback, useRef } from 'react';
 import DeckGL from '@deck.gl/react';
 import { GeoJsonLayer, ScatterplotLayer } from '@deck.gl/layers';
-import { Map } from 'react-map-gl';
 import type { MapViewState } from '@deck.gl/core';
 import type { FeatureCollection, Feature, Geometry } from 'geojson';
 import Papa from 'papaparse';
-import 'mapbox-gl/dist/mapbox-gl.css';
 import { 
   XMarkIcon,
   PaintBrushIcon,
@@ -255,11 +253,10 @@ const MapViewerGL: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isFeatureLocked, setIsFeatureLocked] = useState(false);
 
-  const basemapOptions = {
-    "Light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-    "Dark": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-    "City": "mapbox://styles/mapbox/streets-v12",
-    "Satellite": "mapbox://styles/mapbox/satellite-streets-v12"
+  const basemapOptions: Record<string, string> = {
+    "OpenStreetMap": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    "Carto Light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+    "Carto Dark": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
   };
 
   // Update allAvailableColumns when a new feature is selected
@@ -2164,12 +2161,7 @@ const MapViewerGL: React.FC = () => {
         }}
         controller={true}
         layers={renderLayers()}
-      >
-        <Map
-          mapStyle={mapStyle}
-          mapboxAccessToken={import.meta.env.VITE_MAPBOX_TOKEN}
-        />
-      </DeckGL>
+      />
 
       {/* Legends - positioned above basemap button */}
       <div className="absolute bottom-28 right-4 space-y-4 z-[30]">

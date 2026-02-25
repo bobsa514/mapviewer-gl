@@ -27,7 +27,7 @@
     "@luma.gl/shadertools": "^9.0.0",
     "deck.gl": "^9.1.5",
     "h3-js": "^4.1.0",
-    "mapbox-gl": "^2.15.0",
+    "maplibre-gl": "^4.7.1",
     "papaparse": "^5.5.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
