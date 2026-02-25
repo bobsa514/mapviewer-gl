@@ -28,14 +28,13 @@ interface ColumnInfo {
   uniqueValues?: string[];
 }
 
-export const FilterModal: React.FC<FilterModalProps> = ({ 
-  isOpen, 
-  onClose, 
-  data, 
+export const FilterModal: React.FC<FilterModalProps> = ({
+  isOpen,
+  onClose,
+  data,
   onApplyFilter,
   activeFilters,
   onRemoveFilter,
-  layerType
 }) => {
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [selectedColumn, setSelectedColumn] = useState<string>('');

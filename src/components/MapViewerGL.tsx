@@ -1,10 +1,11 @@
 import React, { useState, useCallback, useRef } from 'react';
 import DeckGL from '@deck.gl/react';
+import { Map } from 'react-map-gl/maplibre';
 import { GeoJsonLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { MapViewState } from '@deck.gl/core';
 import type { FeatureCollection, Feature, Geometry } from 'geojson';
 import Papa from 'papaparse';
-import { 
+import {
   XMarkIcon,
   PaintBrushIcon,
   FunnelIcon
@@ -65,10 +66,29 @@ interface LayerInfo {
   h3Column?: string;
 }
 
+type BasemapStyle = string | object;
+
+const basemapOptions: Record<string, BasemapStyle> = {
+  "OpenStreetMap": {
+    version: 8,
+    sources: {
+      osm: {
+        type: 'raster',
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        attribution: '© OpenStreetMap contributors'
+      }
+    },
+    layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+  },
+  "Carto Light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+  "Carto Dark": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+};
+
 interface MapConfiguration {
   version: string;
   viewState: MapViewState;
-  basemap: string;
+  basemap: BasemapStyle;
   layers: Array<{
     name: string;
     type: 'geojson' | 'point' | 'h3';
@@ -112,12 +132,6 @@ interface GeoJSONPreviewData {
   properties: string[];
   features: Feature[];
   selectedProperties: Set<string>;
-}
-
-interface HoverInfo {
-  x: number;
-  y: number;
-  data: any;
 }
 
 // Color scale preview component
@@ -231,33 +245,23 @@ const MapViewerGL: React.FC = () => {
   
   const [layers, setLayers] = useState<LayerInfo[]>([]);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
-  const [hoveredFeature, setHoveredFeature] = useState<Feature | null>(null);
-  const [activeColorPicker, setActiveColorPicker] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
-  const [showAllProperties, setShowAllProperties] = useState(false);
   const [selectedFeature, setSelectedFeature] = useState<Feature | null>(null);
   const [showColumnSelector, setShowColumnSelector] = useState(false);
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [allAvailableColumns, setAllAvailableColumns] = useState<string[]>([]);
   const [showAddData, setShowAddData] = useState(false);
-  const [mapStyle, setMapStyle] = useState("https://basemaps.cartocdn.com/gl/positron-gl-style/style.json");
+  const [mapStyle, setMapStyle] = useState<BasemapStyle>(basemapOptions["Carto Light"]);
   const [showBasemapSelector, setShowBasemapSelector] = useState(false);
-  const [showSymbologyModal, setShowSymbologyModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState<number | null>(null);
   const [activeFilters, setActiveFilters] = useState<{[layerId: number]: { fn: (item: any) => boolean, info: FilterInfo }[]}>({});
   const [showLayers, setShowLayers] = useState(true);
   const [csvPreview, setCsvPreview] = useState<CSVPreviewData | null>(null);
   const [geoJSONPreview, setGeoJSONPreview] = useState<GeoJSONPreviewData | null>(null);
-  const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const geojsonFileRef = useRef<HTMLInputElement>(null);
   const [isFeatureLocked, setIsFeatureLocked] = useState(false);
-
-  const basemapOptions: Record<string, string> = {
-    "OpenStreetMap": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    "Carto Light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-    "Carto Dark": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-  };
 
   // Update allAvailableColumns when a new feature is selected
   React.useEffect(() => {
@@ -272,7 +276,7 @@ const MapViewerGL: React.FC = () => {
         setSelectedColumns(columns.slice(0, 5));
       }
     }
-  }, [selectedFeature]);
+  }, [selectedFeature, selectedColumns]);
 
   const handleColumnToggle = (column: string) => {
     setSelectedColumns(prev => 
@@ -388,7 +392,7 @@ const MapViewerGL: React.FC = () => {
     startIndex: number,
     headers: string[],
     selectedColumns: Set<string>,
-    coordinates: { lat: string; lng: string },
+    _coordinates: { lat: string; lng: string },
     latIndex: number,
     lngIndex: number,
     chunkSize: number,
@@ -721,11 +725,6 @@ const MapViewerGL: React.FC = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    // Store the file in the ref for later use
-    if (fileInputRef.current) {
-      fileInputRef.current.files = event.target.files;
-    }
-
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -787,9 +786,9 @@ const MapViewerGL: React.FC = () => {
   };
 
   const proceedWithSelectedGeoJSONProperties = () => {
-    if (!fileInputRef.current?.files?.[0] || !geoJSONPreview) return;
-    
-    const file = fileInputRef.current.files[0];
+    if (!geojsonFileRef.current?.files?.[0] || !geoJSONPreview) return;
+
+    const file = geojsonFileRef.current.files[0];
     setIsLoading(true);
     setLoadingProgress(0);
     
@@ -953,11 +952,6 @@ const MapViewerGL: React.FC = () => {
     }));
   };
 
-  const applyFilters = (layerId: number, data: any[]) => {
-    const layerFilters = activeFilters[layerId] || [];
-    return data.filter(item => layerFilters.every(filter => filter.fn(item)));
-  };
-
   const getNumericValuesForColumn = (layer: LayerInfo, column: string): number[] => {
     const getValue = (properties: { [key: string]: any } | null | undefined): number => {
       const value = properties?.[column];
@@ -1049,10 +1043,6 @@ const MapViewerGL: React.FC = () => {
   };
 
   const renderLayers = () => {
-    // Clear caches when layers change
-    colorCache.current = {};
-    sizeCache.current = {};
-
     const getGeometryKey = (geometry: Geometry): string => {
       if ('coordinates' in geometry) {
         return JSON.stringify(geometry.coordinates);
@@ -1112,7 +1102,8 @@ const MapViewerGL: React.FC = () => {
             },
             onClick: (info: any) => {
               if (info.object) {
-                const hexBoundary = h3.cellToBoundary(info.object.hex);
+                const hexBoundary = h3.cellToBoundary(info.object.hex)
+                  .map(([lat, lng]) => [lng, lat]);
                 const feature = {
                   type: 'Feature',
                   geometry: {
@@ -1138,7 +1129,7 @@ const MapViewerGL: React.FC = () => {
                   type: 'Feature',
                   geometry: {
                     type: 'Polygon',
-                    coordinates: [h3.cellToBoundary(info.object.hex)]
+                    coordinates: [h3.cellToBoundary(info.object.hex).map(([lat, lng]) => [lng, lat])]
                   },
                   properties: info.object.properties
                 } as Feature;
@@ -1408,11 +1399,14 @@ const MapViewerGL: React.FC = () => {
       // Set basemap
       setMapStyle(config.basemap);
 
+      // Pre-generate IDs for all imported layers so filters and layers share the same IDs
+      const importedIds = config.layers.map(() => getNextLayerId());
+
       // Import filters first so they can be applied to the layers
       const newFilters: {[layerId: number]: { fn: (item: any) => boolean, info: FilterInfo }[]} = {};
       config.layers.forEach((layerConfig, index) => {
         if (layerConfig.filters && layerConfig.filters.length > 0) {
-          newFilters[index] = layerConfig.filters.map(filterInfo => ({
+          newFilters[importedIds[index]] = layerConfig.filters.map(filterInfo => ({
             fn: (item: any) => {
               const value = item.properties?.[filterInfo.column];
               if (filterInfo.type === 'numeric') {
@@ -1458,29 +1452,30 @@ const MapViewerGL: React.FC = () => {
 
       // Import and filter layers
       const newLayers = config.layers.map((layerConfig, index) => {
+        const layerId = importedIds[index];
         // Apply filters to the data
         let filteredData = layerConfig.data;
-        if (newFilters[index]) {
+        if (newFilters[layerId]) {
           if (layerConfig.type === 'geojson') {
             filteredData = {
               ...layerConfig.data,
-              features: layerConfig.data.features.filter((feature: Feature) => 
-                newFilters[index].every(filter => filter.fn(feature))
+              features: layerConfig.data.features.filter((feature: Feature) =>
+                newFilters[layerId].every(filter => filter.fn(feature))
               )
             };
           } else if (layerConfig.type === 'point') {
-            filteredData = layerConfig.data.filter((point: { properties: any }) => 
-              newFilters[index].every(filter => filter.fn(point))
+            filteredData = layerConfig.data.filter((point: { properties: any }) =>
+              newFilters[layerId].every(filter => filter.fn(point))
             );
           } else if (layerConfig.type === 'h3') {
-            filteredData = layerConfig.data.filter((hex: { properties: any }) => 
-              newFilters[index].every(filter => filter.fn({ properties: hex.properties }))
+            filteredData = layerConfig.data.filter((hex: { properties: any }) =>
+              newFilters[layerId].every(filter => filter.fn({ properties: hex.properties }))
             );
           }
         }
 
         return {
-          id: index,
+          id: layerId,
           name: layerConfig.name,
           type: layerConfig.type,
           visible: layerConfig.visible,
@@ -1687,6 +1682,7 @@ const MapViewerGL: React.FC = () => {
                   </label>
                   <input
                     key="geojson-input"
+                    ref={geojsonFileRef}
                     type="file"
                     accept=".json,.geojson"
                     onChange={handleFileUpload}
@@ -2161,7 +2157,9 @@ const MapViewerGL: React.FC = () => {
         }}
         controller={true}
         layers={renderLayers()}
-      />
+      >
+        <Map mapStyle={mapStyle as any} />
+      </DeckGL>
 
       {/* Legends - positioned above basemap button */}
       <div className="absolute bottom-28 right-4 space-y-4 z-[30]">
