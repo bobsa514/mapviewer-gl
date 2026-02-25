@@ -22,10 +22,6 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Create env file
-        run: |
-          echo "VITE_MAPBOX_TOKEN=${{ secrets.MAPBOX_TOKEN }}" > .env
-
       - name: Build
         run: npm run build
 
