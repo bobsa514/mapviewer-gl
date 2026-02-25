@@ -66,7 +66,14 @@ export const FilterModal: React.FC<FilterModalProps> = ({
             return itemProps[key];
           });
           
-          const isNumeric = values.every(v => typeof v === 'number');
+          const nonEmptyValues = values.filter(v => v !== null && v !== undefined && v !== '');
+          const numericCount = nonEmptyValues.filter(v => {
+            if (typeof v === 'number') return true;
+            if (typeof v === 'string') return !isNaN(parseFloat(v));
+            return false;
+          }).length;
+          
+          const isNumeric = nonEmptyValues.length > 0 && numericCount / nonEmptyValues.length >= 0.5;
           const uniqueValues = isNumeric ? undefined : 
             [...new Set(values.map(String))]
               .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));

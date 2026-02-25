@@ -4,13 +4,9 @@ import { GeoJsonLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { Map } from 'react-map-gl';
 import type { MapViewState } from '@deck.gl/core';
 import type { FeatureCollection, Feature, Geometry } from 'geojson';
+import Papa from 'papaparse';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { 
-  PlusIcon, 
-  TrashIcon, 
-  EyeIcon, 
-  EyeSlashIcon,
-  PencilIcon,
   XMarkIcon,
   PaintBrushIcon,
   FunnelIcon
@@ -18,8 +14,6 @@ import {
 import { FilterModal, FilterInfo } from './FilterModal';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
 import * as h3 from 'h3-js';
-import { scaleQuantile } from 'd3-scale';
-import { interpolateRgb } from 'd3-interpolate';
 
 // Initial viewport state (USA view)
 const INITIAL_VIEW_STATE: MapViewState = {
@@ -231,6 +225,12 @@ const SizeLegend: React.FC<{ layer: LayerInfo }> = ({ layer }) => {
 };
 
 const MapViewerGL: React.FC = () => {
+  const layerIdCounter = useRef(0);
+  const getNextLayerId = useCallback(() => {
+    layerIdCounter.current += 1;
+    return layerIdCounter.current;
+  }, []);
+  
   const [layers, setLayers] = useState<LayerInfo[]>([]);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
   const [hoveredFeature, setHoveredFeature] = useState<Feature | null>(null);
@@ -387,7 +387,7 @@ const MapViewerGL: React.FC = () => {
   };
 
   const processChunk = useCallback((
-    lines: string[],
+    rows: string[][],
     startIndex: number,
     headers: string[],
     selectedColumns: Set<string>,
@@ -398,15 +398,13 @@ const MapViewerGL: React.FC = () => {
     onProgress: (progress: number) => void
   ) => {
     const data = [];
-    let validPoints = 0;
-    let invalidPoints = 0;
-    const endIndex = Math.min(startIndex + chunkSize, lines.length);
+    const endIndex = Math.min(startIndex + chunkSize, rows.length);
 
     for (let i = startIndex; i < endIndex; i++) {
-      const line = lines[i];
-      if (!line.trim()) continue;
+      const row = rows[i];
+      if (!row || row.length === 0) continue;
 
-      const values = line.split(',').map(v => v.trim());
+      const values = row.map(v => String(v).trim());
       
       // Parse coordinates
       const lat = parseFloat(values[latIndex]);
@@ -414,7 +412,6 @@ const MapViewerGL: React.FC = () => {
       
       // Validate coordinates
       if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-        invalidPoints++;
         continue;
       }
 
@@ -430,15 +427,13 @@ const MapViewerGL: React.FC = () => {
         position: [lng, lat],
         properties
       });
-
-      validPoints++;
     }
 
-    const totalDataRows = lines.length - 1;
+    const totalDataRows = rows.length - 1;
     const progress = ((endIndex - 1) / totalDataRows) * 100;
     onProgress(Math.min(progress, 100));
 
-    return { data, validPoints, invalidPoints, endIndex };
+    return { data, endIndex };
   }, []);
 
   const handleCSVPreview = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -457,50 +452,25 @@ const MapViewerGL: React.FC = () => {
     reader.onload = (e) => {
       try {
         const csvText = e.target?.result as string;
-        const lines = csvText
-          .split(/\r?\n/)
-          .map(line => line.trim())
-          .filter(line => line.length > 0);
+        
+        const parsed = Papa.parse(csvText, {
+          header: false,
+          preview: 11,
+          skipEmptyLines: true
+        });
 
-        if (lines.length < 2) {
+        if (parsed.errors.length > 0) {
+          console.warn('CSV parsing warnings:', parsed.errors);
+        }
+
+        const rows = parsed.data as string[][];
+        
+        if (rows.length < 2) {
           throw new Error('CSV file is empty or has no data rows');
         }
 
-        // Parse headers and clean them
-        const headers = lines[0].split(',').map(h => h.trim());
-        
-        // Parse data rows carefully
-        const previewRows = lines.slice(1, 11).map(line => {
-          const row = new Array(headers.length).fill('');
-          let currentCell = '';
-          let inQuotes = false;
-          let cellIndex = 0;
-          
-          // Parse the line character by character
-          for (let i = 0; i < line.length; i++) {
-            const char = line[i];
-            
-            if (char === '"') {
-              inQuotes = !inQuotes;
-            } else if (char === ',' && !inQuotes) {
-              // End of cell
-              if (cellIndex < headers.length) {
-                row[cellIndex] = currentCell.trim();
-              }
-              currentCell = '';
-              cellIndex++;
-            } else {
-              currentCell += char;
-            }
-          }
-          
-          // Add the last cell
-          if (cellIndex < headers.length) {
-            row[cellIndex] = currentCell.trim();
-          }
-          
-          return row;
-        });
+        const headers = rows[0].map((h: string) => h.trim());
+        const previewRows = rows.slice(1, 11);
 
         // Check for H3 index column
         const h3Column = detectH3Column(headers);
@@ -594,14 +564,24 @@ const MapViewerGL: React.FC = () => {
     reader.onload = (e) => {
       try {
         const csvText = e.target?.result as string;
-        const lines = csvText.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
-        const headers = lines[0].split(',').map(h => h.trim());
+        
+        const parsed = Papa.parse(csvText, {
+          header: false,
+          skipEmptyLines: true
+        });
+        
+        if (parsed.errors.length > 0) {
+          console.warn('CSV parsing warnings:', parsed.errors);
+        }
+        
+        const rows = parsed.data as string[][];
+        const headers = rows[0].map((h: string) => h.trim());
         
         // Process data based on type (H3 or coordinates)
         if (csvPreview.isH3Data && csvPreview.h3Column) {
           const h3ColumnIndex = headers.indexOf(csvPreview.h3Column);
-          const hexagons = lines.slice(1).map(line => {
-            const values = line.split(',').map(cell => cell.trim());
+          const hexagons = rows.slice(1).map(row => {
+            const values = row.map(cell => String(cell).trim());
             const h3Index = values[h3ColumnIndex];
             
             const properties: { [key: string]: string } = {};
@@ -615,10 +595,14 @@ const MapViewerGL: React.FC = () => {
               hex: h3Index,
               properties
             };
-          });
+          }).filter(h => h.hex && isValidH3Index(h.hex));
+          
+          if (hexagons.length === 0) {
+            throw new Error('No valid H3 indexes found in the data');
+          }
           
           const newLayer: LayerInfo = {
-            id: layers.length,
+            id: getNextLayerId(),
             name: file.name,
             visible: true,
             data: hexagons,
@@ -659,14 +643,12 @@ const MapViewerGL: React.FC = () => {
             maxLng: -Infinity
           };
 
-          while (currentIndex < lines.length) {
+          while (currentIndex < rows.length) {
             const { 
               data: chunkData, 
-              validPoints, 
-              invalidPoints, 
               endIndex 
             } = processChunk(
-              lines, 
+              rows, 
               currentIndex,
               headers,
               csvPreview.selectedColumns,
@@ -703,7 +685,7 @@ const MapViewerGL: React.FC = () => {
           const zoom = Math.min(20, Math.max(3, -Math.log2(maxDiff * 2.5)));
 
           const newLayer: LayerInfo = {
-            id: layers.length,
+            id: getNextLayerId(),
             name: file.name,
             visible: true,
             data: allData,
@@ -833,7 +815,7 @@ const MapViewerGL: React.FC = () => {
         };
 
         const newLayer: LayerInfo = {
-          id: layers.length,
+          id: getNextLayerId(),
           name: file.name,
           visible: true,
           data: filteredGeojson,
