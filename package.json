@@ -15,13 +15,17 @@
   "dependencies": {
     "@arcgis/core": "^4.32.9",
     "@deck.gl/core": "^9.1.5",
+    "@deck.gl/extensions": "^9.2.10",
     "@deck.gl/geo-layers": "^9.1.6",
     "@deck.gl/layers": "^9.1.5",
+    "@deck.gl/mesh-layers": "^9.2.10",
     "@deck.gl/react": "^9.1.5",
     "@deck.gl/widgets": "^9.1.5",
+    "@duckdb/duckdb-wasm": "1.33.1-dev20.0",
     "@heroicons/react": "^2.2.0",
     "@loaders.gl/core": "^4.0.17",
     "@loaders.gl/json": "^4.0.17",
+    "@luma.gl/constants": "^9.2.6",
     "@luma.gl/core": "^9.0.0",
     "@luma.gl/engine": "^9.0.0",
     "@luma.gl/shadertools": "^9.0.0",
@@ -31,7 +35,8 @@
     "papaparse": "^5.5.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-map-gl": "^7.1.6"
+    "react-map-gl": "^7.1.6",
+    "shpjs": "^6.2.0"
   },
   "devDependencies": {
     "@types/geojson": "^7946.0.14",
@@ -39,6 +44,7 @@
     "@types/papaparse": "^5.5.2",
     "@types/react": "^18.2.55",
     "@types/react-dom": "^18.2.19",
+    "@types/shpjs": "^3.4.7",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
     "@typescript-eslint/parser": "^6.21.0",
     "@vitejs/plugin-react": "^4.2.1",
