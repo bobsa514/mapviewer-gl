@@ -1,124 +1,133 @@
-# MapViewerGL
+# MapViewer-GL
 
-A modern web-based map viewer that supports multiple data formats and interactive visualization.
+A browser-based geospatial data viewer with SQL-powered analytics. Upload your data, style it on an interactive map, and run spatial queries — all locally in the browser with zero server-side processing.
 
-🌍 [Live Demo](https://bobsa514.github.io/mapviewer-gl/)
+[Live Demo](https://bobsa514.github.io/mapviewer-gl/)
 
-## Important Notes
+## Key Features
 
-### Data Storage
-- **No Data Storage**: Please note that this tool does not store any data on the server. All data processing occurs locally on the user's machine. Once the session is closed, any uploaded data will be lost. This design ensures user privacy and data security.
+### Data Formats
+- **GeoJSON** — polygons, lines, points, and multi-geometries
+- **CSV** — auto-detects lat/lng columns or H3 hex indexes
+- **Shapefile** — upload a zipped `.shp`/`.dbf`/`.prj` bundle; parsed client-side via [shpjs](https://github.com/calvinmetcalf/shapefile-js)
+- **Map Configurations** — export/import full map state (layers, styles, filters, view)
 
-### Mapbox Token
-- **Environment Configuration**: It is REQUIRED to change the `.env` file in your project directory to include your own Mapbox token. The demo token included has strict usage limits and may stop working if exceeded.
-- **Token Requirements**: 
-  - Sign up for a free account at [Mapbox](https://www.mapbox.com/signup/)
-  - Create a new public token in your account
-  - The free tier includes 50,000 map loads per month
-  - The map will stop working if this limit is exceeded
-- **Usage Limits**:
-  - The free Mapbox tier has a limit of 50,000 map loads per month
-  - Once this limit is reached, the map will stop loading for new users
-  - The limit resets at the start of each billing cycle
-  - Consider using the free CartoDB basemaps ("Light", "Dark", "City") which don't have these restrictions
-- To set your token, open the `.env` file and replace the placeholder with your own Mapbox access token:
-  ```plaintext
-  VITE_MAPBOX_TOKEN=your_mapbox_token_here
-  ```
-- **⚠️ Warning**: Never commit your `.env` file to version control. Add it to your `.gitignore` file.
+### In-Browser SQL with DuckDB-WASM
+Every data layer you add becomes a queryable SQL table powered by [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview). This means you can:
 
-## Features
+- **Query any layer** — `SELECT * FROM my_layer WHERE population > 10000`
+- **Join layers** — `SELECT a.*, b.name FROM points a JOIN polygons b ON ...`
+- **Spatial operations** — `ST_Within`, `ST_Intersects`, `ST_Buffer`, `ST_Distance`, and more via the [DuckDB Spatial extension](https://duckdb.org/docs/extensions/spatial/overview)
+- **Add results as layers** — query results with geometry columns can be visualized directly on the map
 
-- 📍 Support for multiple data formats:
-  - GeoJSON files for polygon/line/point data
-  - CSV files with coordinate data (auto-detects lat/long columns)
-  - CSV files with H3 hexagon indices
-- 🎨 Interactive styling options:
-  - Color picker for layers
-  - Opacity control
-  - Point size adjustment for CSV data
-- 👁️ Layer management:
-  - Toggle layer visibility
-  - Collapsible layer panel
-  - Customizable symbology
-  - Data filtering capabilities
-- 🗺️ Map features:
-  - Multiple base map options (Light, Dark, City, Satellite)
-  - Interactive feature selection
-  - Customizable property display
-  - Automatic viewport fitting to data
-- 🔍 Data exploration:
-  - Feature property inspection
-  - Column selection for display
-  - Advanced filtering options
-- 💾 Configuration Management:
-  - Export current map configuration
-  - Import saved configurations
-  - Share map configurations with others
-  - Preserves layers, styling, filters, and view state
+DuckDB is lazy-loaded (~200 KB WASM) only when you open the SQL editor, so it doesn't affect initial page load.
 
-## Data Format Requirements
+### Map & Styling
+- Multiple free basemaps (Carto Light, Carto Dark, OpenStreetMap) — no API key needed
+- Per-layer color and size symbology with classified breaks (equal-interval)
+- 8 sequential color scales (Reds, Blues, YlOrRd, etc.)
+- Opacity, point size, and visibility controls
+- Interactive feature inspection on click
+- Color and size legends
+
+### Layer Management
+- Drag-and-drop file upload via centered modal
+- Toggle visibility, remove, and reorder layers
+- Column-level filtering with multiple conditions
+- Export/import full map configurations as JSON
+
+## Data Privacy
+
+All processing happens locally in your browser. No data is uploaded to any server. When you close the tab, all data is gone.
+
+## Data Format Details
 
 ### GeoJSON
-- Standard GeoJSON format with Feature Collection
-- Properties will be available for filtering and display
+Standard GeoJSON FeatureCollection. All geometry types supported. Properties are available for filtering, symbology, and SQL queries.
 
 ### CSV (Points)
-- Must include coordinate columns with one of these naming patterns:
-  - Latitude: `lat`, `latitude`, or `y`
-  - Longitude: `lng`, `long`, `longitude`, or `x`
-- Additional columns will be available as properties
+Include coordinate columns with common names:
+- Latitude: `lat`, `latitude`, `y`
+- Longitude: `lng`, `long`, `longitude`, `lon`, `x`
 
 ### CSV (H3 Hexagons)
-- Must include an H3 index column with one of these names:
-  - `hex_id`, `h3_index`, `h3`, or `hexagon`
-- H3 indices must be valid H3 cell addresses
-- Additional columns will be available as properties
+Include an H3 index column named: `hex_id`, `h3_index`, `h3`, or `hexagon`. Must contain valid H3 cell addresses.
+
+### Shapefile
+Upload a `.zip` containing `.shp`, `.dbf`, and optionally `.prj` files. Multi-layer ZIPs are merged into a single collection.
 
 ## Setup
 
-1. Clone the repository
 ```bash
-git clone https://github.com/yourusername/mapviewer-gl.git
+git clone https://github.com/bobsa514/mapviewer-gl.git
 cd mapviewer-gl
 ```
 
-2. Create a `.env` file in the root directory:
+Install dependencies (uses Yarn 4 via Corepack):
+
 ```bash
-cp .env.example .env
+corepack enable
+yarn install
 ```
 
-3. Add your Mapbox token to the `.env` file:
+Start the development server:
+
 ```bash
-VITE_MAPBOX_TOKEN=your_mapbox_token_here
+yarn dev
 ```
 
-4. Install dependencies:
+Build for production:
+
 ```bash
-npm install
+yarn build
 ```
 
-5. Start the development server:
-```bash
-npm run dev
+## Architecture
+
+The app is a React + TypeScript SPA built with Vite. Key libraries:
+
+| Library | Purpose |
+|---|---|
+| [deck.gl](https://deck.gl/) | WebGL-accelerated map layers (GeoJSON, Scatterplot, H3) |
+| [MapLibre GL JS](https://maplibre.org/) | Basemap rendering (via react-map-gl) |
+| [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview) | In-browser SQL engine with spatial extension |
+| [shpjs](https://github.com/calvinmetcalf/shapefile-js) | Shapefile parsing (ZIP to GeoJSON) |
+| [PapaParse](https://www.papaparse.com/) | CSV parsing |
+| [h3-js](https://h3geo.org/) | H3 hexagon utilities |
+| [Tailwind CSS](https://tailwindcss.com/) | Styling |
+
+### Project Structure
+
+```
+src/
+  types.ts                  # Shared type definitions (LayerInfo, ColorScaleName, etc.)
+  utils/
+    geometry.ts             # Coordinate extraction, bounds, color/size mapping
+    csv.ts                  # CSV column detection and row processing
+    layers.ts               # Numeric column detection for symbology
+    shapefile.ts            # Shapefile ZIP parsing (code-split)
+    duckdb.ts               # DuckDB-WASM init, table registration, query execution (code-split)
+  components/
+    MapViewerGL.tsx          # Main orchestrator — state management, deck.gl rendering
+    AddDataModal.tsx         # Tabbed file upload modal (GeoJSON, CSV, Shapefile, Config)
+    SQLEditor.tsx            # Split-pane SQL editor with results table
+    LayersPanel.tsx          # Layer list with symbology controls
+    FilterModal.tsx          # Column-level data filtering
+    CSVPreviewModal.tsx      # CSV column selection before import
+    GeoJSONPreviewModal.tsx  # GeoJSON property selection before import
+    FeaturePropertiesPanel.tsx # On-click feature attribute inspector
+    BasemapSelector.tsx      # Basemap style picker
+    LegendDisplay.tsx        # Color and size legends
 ```
 
 ## Deployment
 
-The application is automatically deployed to GitHub Pages when changes are pushed to the main branch. The deployment process uses GitHub Actions and securely injects the Mapbox token from GitHub Secrets.
-
-## Environment Variables
-
-- `VITE_MAPBOX_TOKEN`: Your Mapbox GL JS access token (required)
-
-## Usage
-1. Clone the repository.
-2. Install dependencies using `npm install`.
-3. Update the `.env` file with your Mapbox token.
-4. Run the application using `npm run dev`.
-5. Deploy the application using `npm run deploy`.
+Automatically deployed to GitHub Pages on push to `main` via GitHub Actions.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues or pull requests.
-Connect to me at <me@boyangsa.com>
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Author
+
+**Boyang Sa** — [boyangsa.com](https://boyangsa.com) | [GitHub](https://github.com/bobsa514) | [me@boyangsa.com](mailto:me@boyangsa.com)
