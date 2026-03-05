@@ -7,7 +7,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 
-type TabId = 'geojson' | 'csv' | 'shapefile' | 'config';
+type TabId = 'geojson' | 'csv' | 'shapefile' | 'parquet' | 'config';
 
 interface AddDataModalProps {
   isOpen: boolean;
@@ -15,6 +15,7 @@ interface AddDataModalProps {
   onGeoJSONFile: (file: File) => void;
   onCSVFile: (file: File) => void;
   onShapefileFile: (file: File) => void;
+  onParquetFile: (file: File) => void;
   onConfigFile: (file: File) => void;
   onExport: () => void;
   isLoading: boolean;
@@ -25,6 +26,7 @@ const tabs: { id: TabId; label: string; accept: string; description: string }[] 
   { id: 'geojson', label: 'GeoJSON', accept: '.json,.geojson', description: 'Upload a GeoJSON file (.json, .geojson)' },
   { id: 'csv', label: 'CSV', accept: '.csv', description: 'Upload a CSV with coordinates or H3 indexes' },
   { id: 'shapefile', label: 'Shapefile', accept: '.zip', description: 'Upload a zipped shapefile (.zip)' },
+  { id: 'parquet', label: 'Parquet', accept: '.parquet', description: 'Upload a Parquet or GeoParquet file' },
   { id: 'config', label: 'Config', accept: '.json', description: 'Import a previously exported map configuration' },
 ];
 
@@ -34,6 +36,7 @@ export const AddDataModal: React.FC<AddDataModalProps> = ({
   onGeoJSONFile,
   onCSVFile,
   onShapefileFile,
+  onParquetFile,
   onConfigFile,
   onExport,
   isLoading,
@@ -48,9 +51,10 @@ export const AddDataModal: React.FC<AddDataModalProps> = ({
       case 'geojson': onGeoJSONFile(file); break;
       case 'csv': onCSVFile(file); break;
       case 'shapefile': onShapefileFile(file); break;
+      case 'parquet': onParquetFile(file); break;
       case 'config': onConfigFile(file); break;
     }
-  }, [activeTab, onGeoJSONFile, onCSVFile, onShapefileFile, onConfigFile]);
+  }, [activeTab, onGeoJSONFile, onCSVFile, onShapefileFile, onParquetFile, onConfigFile]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();

@@ -21,15 +21,24 @@ export const CSVPreviewModal: React.FC<CSVPreviewModalProps> = ({
   onDeselectAll,
   onProceed,
 }) => {
+  const isDuckDBOnly = csvPreview.mode === 'duckdb_only';
+
   return (
     <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 max-w-[90vw] w-[1000px] max-h-[90vh] overflow-hidden flex flex-col">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold text-gray-900">Preview CSV Data</h2>
+          <h2 className="text-xl font-semibold text-gray-900">
+            {isDuckDBOnly ? 'Register as SQL Table' : 'Preview CSV Data'}
+          </h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
             <XMarkIcon className="h-6 w-6" />
           </button>
         </div>
+        {isDuckDBOnly && (
+          <div className="mb-4 px-4 py-3 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800">
+            No coordinate or H3 columns detected. This file will be registered as a SQL-only table for use in queries and JOINs.
+          </div>
+        )}
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <button onClick={onSelectAll} className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">
@@ -57,7 +66,7 @@ export const CSVPreviewModal: React.FC<CSVPreviewModalProps> = ({
                           type="checkbox"
                           checked={csvPreview.selectedColumns.has(header)}
                           onChange={() => onToggleColumn(header)}
-                          disabled={csvPreview.coordinateColumns.has(header)}
+                          disabled={!isDuckDBOnly && csvPreview.coordinateColumns.has(header)}
                           className={`h-4 w-4 rounded border-gray-300 ${
                             csvPreview.coordinateColumns.has(header) ? 'bg-blue-100 text-blue-600 cursor-not-allowed' : 'text-blue-600'
                           }`}
@@ -90,7 +99,7 @@ export const CSVPreviewModal: React.FC<CSVPreviewModalProps> = ({
             className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
             disabled={csvPreview.selectedColumns.size === 0}
           >
-            Proceed with Selected Columns
+            {isDuckDBOnly ? 'Register as SQL Table' : 'Proceed with Selected Columns'}
           </button>
         </div>
       </div>

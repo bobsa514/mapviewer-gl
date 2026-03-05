@@ -27,6 +27,14 @@ export const colorScales: Record<ColorScaleName, string[]> = {
   RdPu: ['#feebe2', '#fbb4b9', '#f768a1', '#c51b8a', '#7a0177']
 };
 
+/** A table registered in DuckDB without a corresponding map layer. */
+export interface DuckDBOnlyTable {
+  tableName: string;
+  fileName: string;
+  sourceType: 'csv' | 'parquet';
+  columns: string[];
+}
+
 /** Runtime representation of a single data layer on the map. */
 export interface LayerInfo {
   id: number;
@@ -34,6 +42,7 @@ export interface LayerInfo {
   type: 'geojson' | 'point' | 'h3';
   data: any;
   visible: boolean;
+  sourceType?: 'geojson' | 'csv' | 'shapefile' | 'parquet';
   colorMapping?: {
     column: string;
     numClasses: number;
@@ -123,6 +132,7 @@ export interface CSVPreviewData {
   coordinateColumns: Set<string>;
   isH3Data: boolean;
   h3Column?: string;
+  mode: 'geo' | 'duckdb_only';
 }
 
 /** Transient state for the GeoJSON property-selection preview modal. */

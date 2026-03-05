@@ -8,7 +8,7 @@ import Papa from 'papaparse';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
 import * as h3 from 'h3-js';
 
-import type { LayerInfo, BasemapStyle, MapConfiguration, CSVPreviewData, GeoJSONPreviewData, FilterInfo } from '../types';
+import type { LayerInfo, BasemapStyle, MapConfiguration, CSVPreviewData, GeoJSONPreviewData, FilterInfo, DuckDBOnlyTable } from '../types';
 import { basemapOptions } from '../types';
 import { extractCoordinates, calculateBounds, hexToRGB, getColorForValue, getSizeForValue } from '../utils/geometry';
 import { detectCoordinateColumns, detectH3Column, isValidH3Index, processChunk } from '../utils/csv';
@@ -61,42 +61,68 @@ const MapViewerGL: React.FC = () => {
   const [registeredTables, setRegisteredTables] = useState<string[]>([]);
   const [isDuckDBReady, setIsDuckDBReady] = useState(false);
   const [showSQLEditor, setShowSQLEditor] = useState(false);
+  const [duckdbOnlyTables, setDuckdbOnlyTables] = useState<DuckDBOnlyTable[]>([]);
 
   const handleDuckDBReady = useCallback(() => {
     setIsDuckDBReady(true);
   }, []);
 
+  // Track which layer names are present to avoid re-syncing on non-structural changes
+  const layerNamesRef = useRef<string>('');
+  const duckdbOnlyNamesRef = useRef<string>('');
+
   // Sync layers with DuckDB tables
   useEffect(() => {
     if (!isDuckDBReady) return;
+
+    // Only sync when layers are added/removed, not when properties (color, opacity, etc.) change
+    const layerNamesKey = layers.map(l => l.name).sort().join('\0');
+    const duckdbNamesKey = duckdbOnlyTables.map(t => t.tableName).sort().join('\0');
+    if (layerNamesKey === layerNamesRef.current && duckdbNamesKey === duckdbOnlyNamesRef.current) return;
+    layerNamesRef.current = layerNamesKey;
+    duckdbOnlyNamesRef.current = duckdbNamesKey;
+
     const syncTables = async () => {
       try {
         const { registerLayer, unregisterLayer, sanitizeTableName } = await import('../utils/duckdb');
 
-        const currentTableNames = layers.map(l => sanitizeTableName(l.name));
+        const duckdbOnlyNames = duckdbOnlyTables.map(t => t.tableName);
+        const layersToRegister = layers.filter(l => l.sourceType !== 'parquet');
+        const currentLayerTableNames = layersToRegister.map(l => sanitizeTableName(l.name));
+        const parquetLayerTableNames = layers.filter(l => l.sourceType === 'parquet').map(l => sanitizeTableName(l.name));
+        const allCurrentTableNames = [...currentLayerTableNames, ...parquetLayerTableNames, ...duckdbOnlyNames];
 
-        // Register new layers
-        for (const layer of layers) {
+        // Register new layers (per-layer try-catch so one failure doesn't block others)
+        for (const layer of layersToRegister) {
           const tableName = sanitizeTableName(layer.name);
           if (!registeredTables.includes(tableName)) {
-            await registerLayer(layer, tableName);
+            try {
+              await registerLayer(layer, tableName);
+            } catch (err) {
+              console.warn(`Failed to register table "${tableName}":`, err);
+            }
           }
         }
 
         // Unregister removed layers
         for (const tableName of registeredTables) {
-          if (!currentTableNames.includes(tableName)) {
-            await unregisterLayer(tableName);
+          if (!allCurrentTableNames.includes(tableName)) {
+            try {
+              await unregisterLayer(tableName);
+            } catch {
+              // Ignore unregister failures
+            }
           }
         }
 
-        setRegisteredTables(currentTableNames);
+        // Always update registered tables list
+        setRegisteredTables(allCurrentTableNames);
       } catch {
         // DuckDB not loaded yet, skip sync
       }
     };
     syncTables();
-  }, [layers, isDuckDBReady]);
+  }, [layers, isDuckDBReady, duckdbOnlyTables]);
 
   // Update allAvailableColumns when a new feature is selected
   useEffect(() => {
@@ -143,11 +169,14 @@ const MapViewerGL: React.FC = () => {
         }
 
         const coordinateColumns = new Set<string>();
+        let csvMode: 'geo' | 'duckdb_only' = 'geo';
         if (!isH3Data) {
           const coordinates = detectCoordinateColumns(headers);
           if (coordinates) {
             coordinateColumns.add(coordinates.lat);
             coordinateColumns.add(coordinates.lng);
+          } else {
+            csvMode = 'duckdb_only';
           }
         }
 
@@ -157,7 +186,8 @@ const MapViewerGL: React.FC = () => {
           selectedColumns: new Set(headers),
           coordinateColumns,
           isH3Data,
-          h3Column: h3Column || undefined
+          h3Column: h3Column || undefined,
+          mode: csvMode,
         });
       } catch (error) {
         console.error('Error parsing CSV:', error);
@@ -177,9 +207,33 @@ const MapViewerGL: React.FC = () => {
     setCsvPreview({ ...csvPreview, selectedColumns: newSelected });
   };
 
-  const proceedWithSelectedColumns = () => {
+  const proceedWithSelectedColumns = async () => {
     if (!csvFileRef.current || !csvPreview) return;
     const file = csvFileRef.current;
+
+    // DuckDB-only mode: register as SQL table, no map layer
+    if (csvPreview.mode === 'duckdb_only') {
+      setIsLoading(true);
+      try {
+        const { registerPlainCSVTable } = await import('../utils/duckdb');
+        const { initDuckDB } = await import('../utils/duckdb');
+        await initDuckDB();
+        const { tableName, columns } = await registerPlainCSVTable(file);
+        setDuckdbOnlyTables(prev => [...prev, {
+          tableName, fileName: file.name, sourceType: 'csv', columns,
+        }]);
+        setRegisteredTables(prev => prev.includes(tableName) ? prev : [...prev, tableName]);
+      } catch (error) {
+        console.error('Error registering CSV table:', error);
+        alert(error instanceof Error ? error.message : 'Error registering CSV table');
+      } finally {
+        setIsLoading(false);
+        setCsvPreview(null);
+        csvFileRef.current = null;
+      }
+      return;
+    }
+
     setIsLoading(true);
     setLoadingProgress(0);
 
@@ -337,6 +391,47 @@ const MapViewerGL: React.FC = () => {
     reader.readAsArrayBuffer(file);
   }, []);
 
+  // ---- Parquet handling ----
+  const handleParquetFile = useCallback(async (file: File) => {
+    setShowAddDataModal(false);
+    setIsLoading(true);
+    try {
+      const { initDuckDB, registerParquetFile, extractGeoParquetAsGeoJSON } = await import('../utils/duckdb');
+      await initDuckDB();
+      const { tableName, geomColumn, geomColumnType, columns } = await registerParquetFile(file);
+
+      if (geomColumn) {
+        // GeoParquet → extract geometry and add as map layer
+        const fc = await extractGeoParquetAsGeoJSON(tableName, geomColumn, geomColumnType);
+        addGeoJSONLayer(fc, new Set(Object.keys(fc.features[0]?.properties || {})), file.name, 'parquet');
+        setRegisteredTables(prev => prev.includes(tableName) ? prev : [...prev, tableName]);
+      } else {
+        // Plain Parquet → DuckDB-only table
+        setDuckdbOnlyTables(prev => [...prev, {
+          tableName, fileName: file.name, sourceType: 'parquet', columns,
+        }]);
+        setRegisteredTables(prev => prev.includes(tableName) ? prev : [...prev, tableName]);
+      }
+    } catch (error) {
+      console.error('Error processing Parquet file:', error);
+      alert(error instanceof Error ? error.message : 'Error processing Parquet file');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // ---- DuckDB-only table removal ----
+  const handleRemoveDuckDBOnlyTable = useCallback(async (tableName: string) => {
+    try {
+      const { unregisterLayer } = await import('../utils/duckdb');
+      await unregisterLayer(tableName);
+    } catch {
+      // Ignore if DuckDB not ready
+    }
+    setDuckdbOnlyTables(prev => prev.filter(t => t.tableName !== tableName));
+    setRegisteredTables(prev => prev.filter(t => t !== tableName));
+  }, []);
+
   const toggleGeoJSONPropertySelection = (property: string) => {
     if (!geoJSONPreview) return;
     const newSelected = new Set(geoJSONPreview.selectedProperties);
@@ -383,7 +478,7 @@ const MapViewerGL: React.FC = () => {
     reader.readAsText(file);
   };
 
-  const addGeoJSONLayer = (geojson: FeatureCollection, selectedProperties: Set<string>, name: string) => {
+  const addGeoJSONLayer = (geojson: FeatureCollection, selectedProperties: Set<string>, name: string, sourceType?: LayerInfo['sourceType']) => {
     const filteredGeojson: FeatureCollection = {
       ...geojson,
       features: geojson.features.map(feature => ({
@@ -397,6 +492,7 @@ const MapViewerGL: React.FC = () => {
     const newLayer: LayerInfo = {
       id: getNextLayerId(), name, visible: true,
       data: filteredGeojson, color: '#ff0000', opacity: 0.7, type: 'geojson',
+      sourceType,
     };
     setLayers(prev => [...prev, newLayer]);
 
@@ -550,6 +646,10 @@ const MapViewerGL: React.FC = () => {
     setLayers(prev => prev.map(l => l.id === layerId ? { ...l, pointSize: size } : l));
   };
 
+  const renameLayer = (layerId: number, newName: string) => {
+    setLayers(prev => prev.map(l => l.id === layerId ? { ...l, name: newName } : l));
+  };
+
   const toggleLayerExpanded = (layerId: number) => {
     setLayers(prev => prev.map(l => l.id === layerId ? { ...l, isExpanded: !l.isExpanded } : l));
   };
@@ -632,11 +732,14 @@ const MapViewerGL: React.FC = () => {
     addGeoJSONLayer(geojson, new Set(Object.keys(geojson.features[0]?.properties || {})), name);
   }, []);
 
-  // ---- Render deck.gl layers ----
-  const colorCache = useRef<{[key: string]: [number, number, number, number]}>({});
-  const sizeCache = useRef<{[key: string]: number}>({});
+  // Use refs for hover feature to avoid re-rendering deck.gl layers on every mouse move
+  const selectedFeatureRef = useRef<Feature | null>(null);
+  selectedFeatureRef.current = selectedFeature;
+  const isFeatureLockedRef = useRef(false);
+  isFeatureLockedRef.current = isFeatureLocked;
 
-  const renderLayers = () => {
+  // ---- Render deck.gl layers ----
+  const deckLayers = React.useMemo(() => {
     const getGeometryKey = (geometry: Geometry): string => {
       if ('coordinates' in geometry) return JSON.stringify(geometry.coordinates);
       if (geometry.type === 'GeometryCollection') return JSON.stringify(geometry.geometries.map(g => getGeometryKey(g)));
@@ -657,23 +760,15 @@ const MapViewerGL: React.FC = () => {
           pickable: true, wireframe: true, filled: true, extruded: false,
           getHexagon: (d: any) => d.hex,
           getFillColor: (d: any) => {
-            const cacheKey = `${layer.id}-${d.hex}`;
-            if (colorCache.current[cacheKey]) return colorCache.current[cacheKey];
-            let color: [number, number, number, number];
             if (layer.colorMapping?.column) {
               const value = d.properties[layer.colorMapping.column];
               const numericValue = typeof value === 'string' ? parseFloat(value) : value;
               if (!isNaN(numericValue)) {
                 const [cr, cg, cb] = getColorForValue(numericValue, layer.color, layer.colorMapping);
-                color = [cr, cg, cb, Math.round(layer.opacity * 255)];
-              } else {
-                color = [r, g, b, Math.round(layer.opacity * 255)];
+                return [cr, cg, cb, Math.round(layer.opacity * 255)] as [number, number, number, number];
               }
-            } else {
-              color = [r, g, b, Math.round(layer.opacity * 255)];
             }
-            colorCache.current[cacheKey] = color;
-            return color;
+            return [r, g, b, Math.round(layer.opacity * 255)] as [number, number, number, number];
           },
           getLineColor: [255, 255, 255] as [number, number, number],
           lineWidthMinPixels: 1,
@@ -685,7 +780,7 @@ const MapViewerGL: React.FC = () => {
             if (info.object) {
               const hexBoundary = h3.cellToBoundary(info.object.hex).map(([lat, lng]: [number, number]) => [lng, lat]);
               const feature = { type: 'Feature', geometry: { type: 'Polygon', coordinates: [hexBoundary] }, properties: info.object.properties } as Feature;
-              if (isFeatureLocked && selectedFeature?.geometry.type === 'Polygon' && JSON.stringify(selectedFeature.geometry.coordinates) === JSON.stringify([hexBoundary])) {
+              if (isFeatureLockedRef.current && selectedFeatureRef.current?.geometry.type === 'Polygon' && JSON.stringify(selectedFeatureRef.current.geometry.coordinates) === JSON.stringify([hexBoundary])) {
                 setIsFeatureLocked(false); setSelectedFeature(null);
               } else {
                 setSelectedFeature(feature); setIsFeatureLocked(true);
@@ -693,9 +788,9 @@ const MapViewerGL: React.FC = () => {
             }
           },
           onHover: (info: any) => {
-            if (!isFeatureLocked && info.object) {
+            if (!isFeatureLockedRef.current && info.object) {
               setSelectedFeature({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [h3.cellToBoundary(info.object.hex).map(([lat, lng]: [number, number]) => [lng, lat])] }, properties: info.object.properties } as Feature);
-            } else if (!isFeatureLocked) {
+            } else if (!isFeatureLockedRef.current) {
               setSelectedFeature(null);
             }
           }
@@ -710,50 +805,35 @@ const MapViewerGL: React.FC = () => {
           data: filteredData,
           getPosition: (d: any) => d.position,
           getFillColor: (d: any) => {
-            const cacheKey = `${layer.id}-${d.position.join(',')}`;
-            if (colorCache.current[cacheKey]) return colorCache.current[cacheKey];
-            let color: [number, number, number, number];
             if (layer.colorMapping?.column) {
               const value = d.properties[layer.colorMapping.column];
               const numericValue = typeof value === 'string' ? parseFloat(value) : value;
               if (!isNaN(numericValue)) {
                 const [cr, cg, cb] = getColorForValue(numericValue, layer.color, layer.colorMapping);
-                color = [cr, cg, cb, Math.round(layer.opacity * 255)];
-              } else {
-                color = [r, g, b, Math.round(layer.opacity * 255)];
+                return [cr, cg, cb, Math.round(layer.opacity * 255)] as [number, number, number, number];
               }
-            } else {
-              color = [r, g, b, Math.round(layer.opacity * 255)];
             }
-            colorCache.current[cacheKey] = color;
-            return color;
+            return [r, g, b, Math.round(layer.opacity * 255)] as [number, number, number, number];
           },
           getRadius: (d: any) => {
-            const cacheKey = `size-${layer.id}-${d.position.join(',')}`;
-            if (sizeCache.current[cacheKey]) return sizeCache.current[cacheKey];
-            let size: number;
             if (layer.sizeMapping?.column) {
               const value = d.properties[layer.sizeMapping.column];
               const numericValue = typeof value === 'string' ? parseFloat(value) : value;
-              size = !isNaN(numericValue) ? getSizeForValue(numericValue, layer.sizeMapping) : (layer.pointSize || 5);
-            } else {
-              size = layer.pointSize || 5;
+              return !isNaN(numericValue) ? getSizeForValue(numericValue, layer.sizeMapping) : (layer.pointSize || 5);
             }
-            if (selectedFeature?.geometry.type === 'Point' && JSON.stringify(selectedFeature.geometry.coordinates) === JSON.stringify(d.position)) {
-              size *= 2;
-            }
-            sizeCache.current[cacheKey] = size;
-            return size;
+            return layer.pointSize || 5;
           },
           radiusScale: 1, radiusUnits: "pixels" as const, radiusMinPixels: 1, radiusMaxPixels: 50, pickable: true,
+          autoHighlight: true,
+          highlightColor: [r, g, b, 255],
           updateTriggers: {
-            getRadius: [layer.id, selectedFeature?.geometry.type === 'Point' ? JSON.stringify(selectedFeature.geometry.coordinates) : null, layer.pointSize, layer.sizeMapping?.column, layer.sizeMapping?.breaks.join(',')],
+            getRadius: [layer.id, layer.pointSize, layer.sizeMapping?.column, layer.sizeMapping?.breaks.join(',')],
             getFillColor: [layer.id, layer.color, layer.opacity, layer.colorMapping?.column, layer.colorMapping?.breaks.join(',')]
           },
           onClick: (info: any) => {
             if (info.object) {
               const feature = { type: 'Feature', geometry: { type: 'Point', coordinates: info.object.position }, properties: info.object.properties } as Feature;
-              if (isFeatureLocked && selectedFeature?.geometry.type === 'Point' && JSON.stringify(selectedFeature.geometry.coordinates) === JSON.stringify(info.object.position)) {
+              if (isFeatureLockedRef.current && selectedFeatureRef.current?.geometry.type === 'Point' && JSON.stringify(selectedFeatureRef.current.geometry.coordinates) === JSON.stringify(info.object.position)) {
                 setIsFeatureLocked(false); setSelectedFeature(null);
               } else {
                 setSelectedFeature(feature); setIsFeatureLocked(true);
@@ -761,52 +841,47 @@ const MapViewerGL: React.FC = () => {
             }
           },
           onHover: (info: any) => {
-            if (!isFeatureLocked && info.object) {
+            if (!isFeatureLockedRef.current && info.object) {
               setSelectedFeature({ type: 'Feature', geometry: { type: 'Point', coordinates: info.object.position }, properties: info.object.properties } as Feature);
-            } else if (!isFeatureLocked) { setSelectedFeature(null); }
+            } else if (!isFeatureLockedRef.current) { setSelectedFeature(null); }
           }
         });
       }
 
       // GeoJSON layer
-      const filteredData = {
-        ...layer.data,
-        features: activeFilters[layer.id]?.length > 0
-          ? layer.data.features.filter((item: Feature) => activeFilters[layer.id].every(filter => filter.fn(item)))
-          : layer.data.features
-      };
+      const filteredData = activeFilters[layer.id]?.length > 0
+        ? { ...layer.data, features: layer.data.features.filter((item: Feature) => activeFilters[layer.id].every(filter => filter.fn(item))) }
+        : layer.data;
 
       return new GeoJsonLayer({
         id: `geojson-layer-${layer.id}`,
         data: filteredData,
+        _normalize: false,
         filled: true, stroked: true, lineWidthUnits: "pixels" as const, lineWidthMinPixels: 1,
+        pointRadiusUnits: "pixels" as const,
+        getPointRadius: layer.pointSize || 5,
         getFillColor: (d: Feature) => {
-          const cacheKey = `${layer.id}-${getGeometryKey(d.geometry)}`;
-          if (colorCache.current[cacheKey]) return colorCache.current[cacheKey];
-          let color: [number, number, number, number];
+          const alpha = Math.round(layer.opacity * 128);
           if (layer.colorMapping?.column) {
             const value = d.properties?.[layer.colorMapping.column];
             if (typeof value === 'number') {
               const [cr, cg, cb] = getColorForValue(value, layer.color, layer.colorMapping);
-              color = [cr, cg, cb, Math.round(layer.opacity * (selectedFeature && areFeaturesEqual(d, selectedFeature) ? 255 : 128))];
-            } else {
-              color = [r, g, b, Math.round(layer.opacity * (selectedFeature && areFeaturesEqual(d, selectedFeature) ? 255 : 128))];
+              return [cr, cg, cb, alpha] as [number, number, number, number];
             }
-          } else {
-            color = [r, g, b, Math.round(layer.opacity * (selectedFeature && areFeaturesEqual(d, selectedFeature) ? 255 : 128))];
           }
-          colorCache.current[cacheKey] = color;
-          return color;
+          return [r, g, b, alpha] as [number, number, number, number];
         },
         getLineColor: [r, g, b, 255] as [number, number, number, number],
         pickable: true,
+        autoHighlight: true,
+        highlightColor: [r, g, b, Math.round(layer.opacity * 255)],
         updateTriggers: {
-          getFillColor: [layer.id, layer.color, layer.opacity, selectedFeature ? getGeometryKey(selectedFeature.geometry) : null, layer.colorMapping?.column, layer.colorMapping?.breaks.join(',')],
-          lineWidthMinPixels: [selectedFeature ? getGeometryKey(selectedFeature.geometry) : null]
+          getFillColor: [layer.id, layer.color, layer.opacity, layer.colorMapping?.column, layer.colorMapping?.breaks.join(',')],
+          getPointRadius: [layer.pointSize],
         },
         onClick: (info: any) => {
           if (info.object) {
-            if (isFeatureLocked && areFeaturesEqual(info.object, selectedFeature)) {
+            if (isFeatureLockedRef.current && areFeaturesEqual(info.object, selectedFeatureRef.current)) {
               setIsFeatureLocked(false); setSelectedFeature(null);
             } else {
               setSelectedFeature(info.object); setIsFeatureLocked(true);
@@ -814,12 +889,12 @@ const MapViewerGL: React.FC = () => {
           }
         },
         onHover: (info: any) => {
-          if (!isFeatureLocked && info.object) setSelectedFeature(info.object);
-          else if (!isFeatureLocked) setSelectedFeature(null);
+          if (!isFeatureLockedRef.current && info.object) setSelectedFeature(info.object);
+          else if (!isFeatureLockedRef.current) setSelectedFeature(null);
         }
       });
     });
-  };
+  }, [layers, activeFilters]);
 
   return (
     <div className="fixed inset-0">
@@ -844,6 +919,7 @@ const MapViewerGL: React.FC = () => {
         onGeoJSONFile={handleGeoJSONFile}
         onCSVFile={handleCSVFile}
         onShapefileFile={handleShapefileFile}
+        onParquetFile={handleParquetFile}
         onConfigFile={handleConfigFile}
         onExport={exportConfiguration}
         isLoading={isLoading}
@@ -912,6 +988,7 @@ const MapViewerGL: React.FC = () => {
             onUpdateSizeMapping={updateLayerSizeMapping}
             onClearSizeMapping={clearLayerSizeMapping}
             onOpenFilter={(layerId) => setShowFilterModal(layerId)}
+            onRename={renameLayer}
           />
         </div>
       )}
@@ -950,7 +1027,7 @@ const MapViewerGL: React.FC = () => {
           }
         }}
         controller={true}
-        layers={renderLayers()}
+        layers={deckLayers}
       >
         <Map mapStyle={mapStyle as any} />
       </DeckGL>
@@ -1004,7 +1081,14 @@ const MapViewerGL: React.FC = () => {
 
       {/* SQL Editor */}
       {showSQLEditor && (
-        <SQLEditor registeredTables={registeredTables} onAddLayer={handleSQLAddLayer} onDuckDBReady={handleDuckDBReady} onClose={() => setShowSQLEditor(false)} />
+        <SQLEditor
+          registeredTables={registeredTables}
+          duckdbOnlyTables={duckdbOnlyTables}
+          onAddLayer={handleSQLAddLayer}
+          onDuckDBReady={handleDuckDBReady}
+          onClose={() => setShowSQLEditor(false)}
+          onRemoveDuckDBOnlyTable={handleRemoveDuckDBOnlyTable}
+        />
       )}
     </div>
   );

@@ -4,7 +4,7 @@
  * and filter access. Each layer card expands to show detailed style options.
  */
 
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   XMarkIcon,
   PaintBrushIcon,
@@ -38,6 +38,7 @@ interface LayersPanelProps {
   onUpdateSizeMapping: (layerId: number, sizeMapping: NonNullable<LayerInfo['sizeMapping']>) => void;
   onClearSizeMapping: (layerId: number) => void;
   onOpenFilter: (layerId: number) => void;
+  onRename: (layerId: number, newName: string) => void;
 }
 
 export const LayersPanel: React.FC<LayersPanelProps> = ({
@@ -53,7 +54,27 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   onUpdateSizeMapping,
   onClearSizeMapping,
   onOpenFilter,
+  onRename,
 }) => {
+  const [editingLayerId, setEditingLayerId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState('');
+  const editInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editingLayerId !== null) editInputRef.current?.focus();
+  }, [editingLayerId]);
+
+  const startEditing = (layer: LayerInfo) => {
+    setEditingLayerId(layer.id);
+    setEditingName(layer.name);
+  };
+
+  const commitRename = () => {
+    if (editingLayerId !== null && editingName.trim()) {
+      onRename(editingLayerId, editingName.trim());
+    }
+    setEditingLayerId(null);
+  };
   const renderColorScaleDropdown = (layer: LayerInfo) => (
     <div>
       <span className="text-xs text-gray-500">Color Scale</span>
@@ -106,7 +127,28 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                 onChange={() => onToggle(layer.id)}
                 className="h-4 w-4 text-blue-600 rounded border-gray-300"
               />
-              <span className="text-sm text-gray-700 truncate max-w-[220px]" title={layer.name}>{layer.name}</span>
+              {editingLayerId === layer.id ? (
+                <input
+                  ref={editInputRef}
+                  type="text"
+                  value={editingName}
+                  onChange={(e) => setEditingName(e.target.value)}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitRename();
+                    if (e.key === 'Escape') setEditingLayerId(null);
+                  }}
+                  className="text-sm text-gray-700 border border-blue-400 rounded px-1 py-0 outline-none max-w-[220px]"
+                />
+              ) : (
+                <span
+                  className="text-sm text-gray-700 truncate max-w-[220px] cursor-pointer hover:text-blue-600"
+                  title="Click to rename"
+                  onClick={() => startEditing(layer)}
+                >
+                  {layer.name}
+                </span>
+              )}
             </div>
             <div className="flex items-center space-x-2">
               <button onClick={() => onToggleExpanded(layer.id)} className="text-gray-500 hover:text-gray-700" title="Symbology">
@@ -198,7 +240,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   className="w-full"
                 />
               </div>
-              {layer.type === 'point' && (
+              {(layer.type === 'point' || layer.type === 'geojson') && (
                 <div className="space-y-2">
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">

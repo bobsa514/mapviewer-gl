@@ -13,15 +13,18 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import type { FeatureCollection } from 'geojson';
+import type { DuckDBOnlyTable } from '../types';
 
 interface SQLEditorProps {
   registeredTables: string[];
+  duckdbOnlyTables: DuckDBOnlyTable[];
   onAddLayer: (name: string, geojson: FeatureCollection) => void;
   onDuckDBReady: () => void;
   onClose: () => void;
+  onRemoveDuckDBOnlyTable: (tableName: string) => void;
 }
 
-export const SQLEditor: React.FC<SQLEditorProps> = ({ registeredTables, onAddLayer, onDuckDBReady, onClose }) => {
+export const SQLEditor: React.FC<SQLEditorProps> = ({ registeredTables, duckdbOnlyTables, onAddLayer, onDuckDBReady, onClose, onRemoveDuckDBOnlyTable }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isDuckDBReady, setIsDuckDBReady] = useState(false);
   const [sql, setSql] = useState('');
@@ -192,16 +195,24 @@ export const SQLEditor: React.FC<SQLEditorProps> = ({ registeredTables, onAddLay
                 </div>
                 {registeredTables.length > 0 && (
                   <div className="flex items-center gap-1.5 flex-wrap justify-end max-w-[50%]">
-                    {registeredTables.map(t => (
-                      <button
-                        key={t}
-                        onClick={() => insertExample(`SELECT * FROM ${t} LIMIT 10`)}
-                        className="text-xs px-1.5 py-0.5 bg-gray-100 text-blue-600 rounded hover:bg-blue-50 hover:text-blue-700 truncate max-w-[140px]"
-                        title={t}
-                      >
-                        {t}
-                      </button>
-                    ))}
+                    {registeredTables.map(t => {
+                      const dbOnly = duckdbOnlyTables.find(d => d.tableName === t);
+                      return (
+                        <button
+                          key={t}
+                          onClick={() => insertExample(`SELECT * FROM ${t} LIMIT 10`)}
+                          className={`text-xs px-1.5 py-0.5 rounded truncate max-w-[140px] ${
+                            dbOnly
+                              ? 'bg-purple-50 text-purple-600 hover:bg-purple-100 hover:text-purple-700'
+                              : 'bg-gray-100 text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                          }`}
+                          title={dbOnly ? `${t} (${dbOnly.sourceType} table)` : t}
+                        >
+                          {dbOnly && <span className="font-semibold mr-0.5">DB</span>}
+                          {t}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -228,17 +239,38 @@ export const SQLEditor: React.FC<SQLEditorProps> = ({ registeredTables, onAddLay
                 <div>
                   <h3 className="font-semibold text-gray-800 mb-1">Your tables</h3>
                   <div className="space-y-1">
-                    {registeredTables.map(t => (
-                      <div key={t} className="flex items-center justify-between bg-gray-50 px-2 py-1 rounded">
-                        <code className="text-xs font-mono text-blue-600">{t}</code>
-                        <button
-                          onClick={() => insertExample(`SELECT * FROM ${t} LIMIT 10`)}
-                          className="text-xs text-blue-500 hover:underline"
-                        >
-                          query
-                        </button>
-                      </div>
-                    ))}
+                    {registeredTables.map(t => {
+                      const dbOnly = duckdbOnlyTables.find(d => d.tableName === t);
+                      return (
+                        <div key={t} className="flex items-center justify-between bg-gray-50 px-2 py-1 rounded">
+                          <div className="flex items-center gap-1.5">
+                            <code className={`text-xs font-mono ${dbOnly ? 'text-purple-600' : 'text-blue-600'}`}>{t}</code>
+                            {dbOnly && (
+                              <span className="text-[10px] px-1 py-0.5 bg-purple-100 text-purple-600 rounded font-medium">
+                                {dbOnly.sourceType === 'csv' ? 'CSV table' : 'Parquet table'}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => insertExample(`SELECT * FROM ${t} LIMIT 10`)}
+                              className="text-xs text-blue-500 hover:underline"
+                            >
+                              query
+                            </button>
+                            {dbOnly && (
+                              <button
+                                onClick={() => onRemoveDuckDBOnlyTable(t)}
+                                className="text-xs text-red-400 hover:text-red-600"
+                                title="Remove table"
+                              >
+                                remove
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

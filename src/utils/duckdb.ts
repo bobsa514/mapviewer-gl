@@ -219,8 +219,8 @@ export const registerLayer = async (layer: LayerInfo, tableName: string): Promis
       const batch = features.slice(i, i + batchSize);
       const values = batch.map(f => {
         const propValues = propColumns.map(col => formatValue(f.properties?.[col], colTypes[col]));
-        const wkt = geometryToWKT(f.geometry);
-        return `(${propValues.join(', ')}${propValues.length ? ', ' : ''}ST_GeomFromText('${wkt}'))`;
+        const geojson = JSON.stringify(f.geometry).replace(/'/g, "''");
+        return `(${propValues.join(', ')}${propValues.length ? ', ' : ''}ST_GeomFromGeoJSON('${geojson}'))`;
       }).join(', ');
       await conn.query(`INSERT INTO "${tableName}" VALUES ${values}`);
     }
@@ -295,33 +295,59 @@ export const executeQuery = async (sql: string): Promise<QueryResult> => {
   const initialResult = await conn.query(sql);
   const initialColumns: string[] = initialResult.schema.fields.map((f: any) => f.name);
 
-  // Detect geometry columns by name or type
+  // Detect geometry columns by checking actual DuckDB column types via DESCRIBE.
+  // Avoids false positives on STRUCT/BLOB columns like "bbox".
   const geomColNames: string[] = [];
-  for (let i = 0; i < initialColumns.length; i++) {
-    const field = initialResult.schema.fields[i];
-    const colName = initialColumns[i].toLowerCase();
-    const typeStr = String(field.type || '').toLowerCase();
-    if (colName === 'geom' || colName === 'geometry' ||
-        typeStr.includes('geometry') || typeStr.includes('blob') ||
-        field.type?.typeId === 13) {
-      geomColNames.push(initialColumns[i]);
+  try {
+    const descResult = await conn.query(`DESCRIBE (${sql})`);
+    const descRows = descResult.toArray();
+    for (const row of descRows) {
+      const colName = row.column_name as string;
+      const colType = String(row.column_type || '').toUpperCase();
+      if (colType === 'GEOMETRY' || colType === 'WKB_GEOMETRY') {
+        geomColNames.push(colName);
+      }
+    }
+  } catch {
+    // DESCRIBE may fail for some queries; fall back to name-based detection
+    for (let i = 0; i < initialColumns.length; i++) {
+      const colName = initialColumns[i].toLowerCase();
+      if (colName === 'geom' || colName === 'geometry') {
+        const field = initialResult.schema.fields[i];
+        const typeStr = String(field.type || '').toUpperCase();
+        // Only match if it looks like a geometry type, not a STRUCT
+        if (!typeStr.includes('STRUCT')) {
+          geomColNames.push(initialColumns[i]);
+        }
+      }
     }
   }
 
-  // If geometry columns found, re-run with ST_AsText conversion
+  // If geometry columns found, re-run with ST_AsGeoJSON for geometry extraction
+  // and ST_AsText for display. Use ST_AsGeoJSON to build FeatureCollection (avoids WKT parsing bugs).
   let result: any;
   let columns: string[];
+  let geojsonResult: any = null;
   if (geomColNames.length > 0) {
-    const wrappedSql = `SELECT ${initialColumns.map(col =>
+    // Query for table display: convert geom to WKT text
+    const displaySql = `SELECT ${initialColumns.map(col =>
       geomColNames.includes(col) ? `ST_AsText("${col}") as "${col}"` : `"${col}"`
     ).join(', ')} FROM (${sql}) AS __user_query`;
+    // Query for GeoJSON extraction: convert geom to GeoJSON strings
+    const geojsonSql = `SELECT ${initialColumns.map(col =>
+      geomColNames.includes(col) ? `ST_AsGeoJSON("${col}") as "${col}"` : `"${col}"`
+    ).join(', ')} FROM (${sql}) AS __user_query`;
     try {
-      result = await conn.query(wrappedSql);
+      result = await conn.query(displaySql);
       columns = result.schema.fields.map((f: any) => f.name);
     } catch {
-      // If wrapping fails (e.g. non-geometry BLOB), fall back to original
       result = initialResult;
       columns = initialColumns;
+    }
+    try {
+      geojsonResult = await conn.query(geojsonSql);
+    } catch {
+      // GeoJSON extraction failed, will not offer "Add as Layer"
     }
   } else {
     result = initialResult;
@@ -332,47 +358,41 @@ export const executeQuery = async (sql: string): Promise<QueryResult> => {
   const rows: any[][] = [];
   const batchData = result.toArray();
 
-  // Re-detect geom column index (now as WKT text)
-  let geomColIndex = -1;
-  for (let i = 0; i < columns.length; i++) {
-    const colName = columns[i].toLowerCase();
-    if (colName === 'geom' || colName === 'geometry') {
-      geomColIndex = i;
-      break;
-    }
-  }
-
-  const features: Feature[] = [];
-
   for (const row of batchData) {
     const rowData: any[] = [];
     for (let i = 0; i < columns.length; i++) {
       let val = row[columns[i]];
-      if (typeof val === 'bigint') {
-        val = Number(val);
-      }
+      if (typeof val === 'bigint') val = Number(val);
       rowData.push(val);
     }
     rows.push(rowData);
+  }
 
-    if (geomColIndex >= 0) {
-      const geomVal = rowData[geomColIndex];
-      if (geomVal && typeof geomVal === 'string') {
-        const geometry = wktToGeometry(geomVal);
-        if (geometry) {
-          const properties: Record<string, any> = {};
-          columns.forEach((col, i) => {
-            if (i !== geomColIndex) {
-              properties[col] = rowData[i];
-            }
-          });
-          features.push({ type: 'Feature', geometry, properties });
+  // Build FeatureCollection from GeoJSON result (not WKT — avoids parser bugs)
+  const features: Feature[] = [];
+  if (geojsonResult && geomColNames.length > 0) {
+    const geomCol = geomColNames[0];
+    const propCols = columns.filter(c => !geomColNames.includes(c));
+    const gjRows = geojsonResult.toArray();
+    for (const row of gjRows) {
+      const geojsonStr = row[geomCol];
+      if (!geojsonStr || typeof geojsonStr !== 'string') continue;
+      try {
+        const geometry = JSON.parse(geojsonStr) as Geometry;
+        const properties: Record<string, any> = {};
+        for (const col of propCols) {
+          let val = row[col];
+          if (typeof val === 'bigint') val = Number(val);
+          properties[col] = val;
         }
+        features.push({ type: 'Feature', geometry, properties });
+      } catch {
+        // Skip unparseable geometry
       }
     }
   }
 
-  const hasGeometry = geomColIndex >= 0 && features.length > 0;
+  const hasGeometry = features.length > 0;
   const geojson: FeatureCollection | undefined = hasGeometry
     ? { type: 'FeatureCollection', features }
     : undefined;
@@ -381,3 +401,140 @@ export const executeQuery = async (sql: string): Promise<QueryResult> => {
 };
 
 export const isDuckDBReady = (): boolean => db !== null;
+
+/**
+ * Register a Parquet file in DuckDB using native read_parquet().
+ * Detects geometry columns by name/type for GeoParquet support.
+ */
+export const registerParquetFile = async (file: File): Promise<{
+  tableName: string;
+  geomColumn: string | null;
+  geomColumnType: string | null;
+  columns: string[];
+}> => {
+  await initDuckDB();
+  const tableName = sanitizeTableName(file.name);
+  const buffer = await file.arrayBuffer();
+  await db.registerFileBuffer(file.name, new Uint8Array(buffer));
+
+  await conn.query(`DROP TABLE IF EXISTS "${tableName}"`);
+  await conn.query(`CREATE TABLE "${tableName}" AS SELECT * FROM read_parquet('${file.name}')`);
+
+  const descResult = await conn.query(`DESCRIBE "${tableName}"`);
+  const rows = descResult.toArray();
+
+  let geomColumn: string | null = null;
+  let geomColumnType: string | null = null;
+  const columns: string[] = [];
+
+  for (const row of rows) {
+    const colName = row.column_name;
+    const colType = String(row.column_type || '').toUpperCase();
+    columns.push(colName);
+
+    if (!geomColumn) {
+      const nameLower = colName.toLowerCase();
+      if (nameLower === 'geom' || nameLower === 'geometry' ||
+          colType.includes('GEOMETRY') || colType === 'BLOB' ||
+          colType === 'WKB_GEOMETRY') {
+        geomColumn = colName;
+        geomColumnType = colType;
+      }
+    }
+  }
+
+  return { tableName, geomColumn, geomColumnType, columns };
+};
+
+/**
+ * Extract GeoParquet geometry as a GeoJSON FeatureCollection.
+ * If the column is already GEOMETRY type (auto-parsed by DuckDB spatial),
+ * uses ST_AsGeoJSON directly. For raw BLOB/WKB, wraps with ST_GeomFromWKB first.
+ */
+export const extractGeoParquetAsGeoJSON = async (
+  tableName: string,
+  geomColumn: string,
+  geomColumnType?: string | null
+): Promise<FeatureCollection> => {
+  if (!conn) throw new Error('DuckDB not initialized');
+
+  // Get all columns except geom
+  const descResult = await conn.query(`DESCRIBE "${tableName}"`);
+  const allCols = descResult.toArray().map((r: any) => r.column_name as string);
+  const propCols = allCols.filter(c => c !== geomColumn);
+
+  const selectCols = propCols.map(c => `"${c}"`).join(', ');
+  // If the column is already GEOMETRY, ST_AsGeoJSON works directly.
+  // Only use ST_GeomFromWKB for raw BLOB/WKB_GEOMETRY columns.
+  const needsWKBConversion = geomColumnType && (geomColumnType === 'BLOB' || geomColumnType === 'WKB_GEOMETRY');
+  const geomExpr = needsWKBConversion
+    ? `ST_AsGeoJSON(ST_GeomFromWKB("${geomColumn}"))`
+    : `ST_AsGeoJSON("${geomColumn}")`;
+  const sql = `SELECT ${selectCols ? selectCols + ', ' : ''}${geomExpr} as __geojson FROM "${tableName}"`;
+
+  const result = await conn.query(sql);
+  const rows = result.toArray();
+
+  const features: Feature[] = [];
+  for (const row of rows) {
+    const geojsonStr = row.__geojson;
+    if (!geojsonStr) continue;
+
+    try {
+      const geometry = JSON.parse(geojsonStr) as Geometry;
+      const properties: Record<string, any> = {};
+      for (const col of propCols) {
+        let val = row[col];
+        if (typeof val === 'bigint') val = Number(val);
+        properties[col] = val;
+      }
+      features.push({ type: 'Feature', geometry, properties });
+    } catch {
+      // Skip rows with unparseable geometry
+    }
+  }
+
+  return { type: 'FeatureCollection', features };
+};
+
+/**
+ * Register a plain CSV file as a DuckDB table.
+ * Parses CSV in JS and uses INSERT batches (same approach as registerLayer)
+ * to avoid DuckDB-WASM virtual filesystem issues with read_csv_auto.
+ */
+export const registerPlainCSVTable = async (file: File): Promise<{
+  tableName: string;
+  columns: string[];
+}> => {
+  await initDuckDB();
+  const tableName = sanitizeTableName(file.name);
+
+  const text = await file.text();
+  const Papa = (await import('papaparse')).default;
+  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+
+  const rows = parsed.data as Record<string, any>[];
+  if (rows.length === 0) throw new Error('CSV file is empty');
+
+  const columns = parsed.meta.fields || Object.keys(rows[0]);
+  const colTypes: Record<string, string> = {};
+  const sampleSize = Math.min(rows.length, 100);
+  for (const col of columns) {
+    colTypes[col] = inferColumnType(rows.slice(0, sampleSize).map(r => r[col]));
+  }
+
+  const colDefs = columns.map(col => `"${col}" ${colTypes[col]}`).join(', ');
+  await conn.query(`DROP TABLE IF EXISTS "${tableName}"`);
+  await conn.query(`CREATE TABLE "${tableName}" (${colDefs})`);
+
+  const batchSize = 500;
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const batch = rows.slice(i, i + batchSize);
+    const values = batch.map(row =>
+      `(${columns.map(col => formatValue(row[col], colTypes[col])).join(', ')})`
+    ).join(', ');
+    await conn.query(`INSERT INTO "${tableName}" VALUES ${values}`);
+  }
+
+  return { tableName, columns };
+};
