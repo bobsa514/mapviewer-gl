@@ -4,7 +4,7 @@
  */
 
 import type { Geometry, FeatureCollection } from 'geojson';
-import type { ColorScaleName, LayerInfo } from '../types';
+import type { LayerInfo } from '../types';
 import { colorScales } from '../types';
 
 /** Recursively extract all [lng, lat] coordinate pairs from any GeoJSON geometry. */

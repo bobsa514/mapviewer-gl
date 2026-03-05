@@ -10,7 +10,7 @@ import * as h3 from 'h3-js';
 
 import type { LayerInfo, BasemapStyle, MapConfiguration, CSVPreviewData, GeoJSONPreviewData, FilterInfo, DuckDBOnlyTable } from '../types';
 import { basemapOptions } from '../types';
-import { extractCoordinates, calculateBounds, hexToRGB, getColorForValue, getSizeForValue } from '../utils/geometry';
+import { calculateBounds, hexToRGB, getColorForValue, getSizeForValue } from '../utils/geometry';
 import { detectCoordinateColumns, detectH3Column, isValidH3Index, processChunk } from '../utils/csv';
 import { getNumericValuesForColumn } from '../utils/layers';
 
@@ -51,10 +51,10 @@ const MapViewerGL: React.FC = () => {
   const [showLayers, setShowLayers] = useState(true);
   const [csvPreview, setCsvPreview] = useState<CSVPreviewData | null>(null);
   const [geoJSONPreview, setGeoJSONPreview] = useState<GeoJSONPreviewData | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const geojsonFileRef = useRef<File | null>(null);
   const csvFileRef = useRef<File | null>(null);
   const pendingGeoJSONRef = useRef<FeatureCollection | null>(null);
+  const pendingGeoJSONNameRef = useRef<string>('shapefile_layer');
   const [isFeatureLocked, setIsFeatureLocked] = useState(false);
 
   // DuckDB state
@@ -76,7 +76,7 @@ const MapViewerGL: React.FC = () => {
     if (!isDuckDBReady) return;
 
     // Only sync when layers are added/removed, not when properties (color, opacity, etc.) change
-    const layerNamesKey = layers.map(l => l.name).sort().join('\0');
+    const layerNamesKey = layers.map(l => l.tableName || l.name).sort().join('\0');
     const duckdbNamesKey = duckdbOnlyTables.map(t => t.tableName).sort().join('\0');
     if (layerNamesKey === layerNamesRef.current && duckdbNamesKey === duckdbOnlyNamesRef.current) return;
     layerNamesRef.current = layerNamesKey;
@@ -88,13 +88,13 @@ const MapViewerGL: React.FC = () => {
 
         const duckdbOnlyNames = duckdbOnlyTables.map(t => t.tableName);
         const layersToRegister = layers.filter(l => l.sourceType !== 'parquet');
-        const currentLayerTableNames = layersToRegister.map(l => sanitizeTableName(l.name));
-        const parquetLayerTableNames = layers.filter(l => l.sourceType === 'parquet').map(l => sanitizeTableName(l.name));
+        const currentLayerTableNames = layersToRegister.map(l => l.tableName || sanitizeTableName(l.name));
+        const parquetLayerTableNames = layers.filter(l => l.sourceType === 'parquet').map(l => l.tableName || sanitizeTableName(l.name));
         const allCurrentTableNames = [...currentLayerTableNames, ...parquetLayerTableNames, ...duckdbOnlyNames];
 
         // Register new layers (per-layer try-catch so one failure doesn't block others)
         for (const layer of layersToRegister) {
-          const tableName = sanitizeTableName(layer.name);
+          const tableName = layer.tableName || sanitizeTableName(layer.name);
           if (!registeredTables.includes(tableName)) {
             try {
               await registerLayer(layer, tableName);
@@ -368,6 +368,7 @@ const MapViewerGL: React.FC = () => {
 
         // Store parsed GeoJSON and show preview modal
         pendingGeoJSONRef.current = geojson;
+        pendingGeoJSONNameRef.current = file.name.replace(/\.[^.]+$/, '');
         geojsonFileRef.current = null; // no file ref for shapefile path
 
         const properties = new Set<string>();
@@ -403,7 +404,7 @@ const MapViewerGL: React.FC = () => {
       if (geomColumn) {
         // GeoParquet → extract geometry and add as map layer
         const fc = await extractGeoParquetAsGeoJSON(tableName, geomColumn, geomColumnType);
-        addGeoJSONLayer(fc, new Set(Object.keys(fc.features[0]?.properties || {})), file.name, 'parquet');
+        addGeoJSONLayer(fc, new Set(Object.keys(fc.features[0]?.properties || {})), file.name, 'parquet', tableName);
         setRegisteredTables(prev => prev.includes(tableName) ? prev : [...prev, tableName]);
       } else {
         // Plain Parquet → DuckDB-only table
@@ -445,7 +446,7 @@ const MapViewerGL: React.FC = () => {
 
     // Use pendingGeoJSONRef (from shapefile) or read from file
     if (pendingGeoJSONRef.current) {
-      addGeoJSONLayer(pendingGeoJSONRef.current, geoJSONPreview.selectedProperties, 'shapefile_layer');
+      addGeoJSONLayer(pendingGeoJSONRef.current, geoJSONPreview.selectedProperties, pendingGeoJSONNameRef.current, 'shapefile');
       pendingGeoJSONRef.current = null;
       setGeoJSONPreview(null);
       return;
@@ -478,7 +479,7 @@ const MapViewerGL: React.FC = () => {
     reader.readAsText(file);
   };
 
-  const addGeoJSONLayer = (geojson: FeatureCollection, selectedProperties: Set<string>, name: string, sourceType?: LayerInfo['sourceType']) => {
+  const addGeoJSONLayer = (geojson: FeatureCollection, selectedProperties: Set<string>, name: string, sourceType?: LayerInfo['sourceType'], tableName?: string) => {
     const filteredGeojson: FeatureCollection = {
       ...geojson,
       features: geojson.features.map(feature => ({
@@ -492,7 +493,7 @@ const MapViewerGL: React.FC = () => {
     const newLayer: LayerInfo = {
       id: getNextLayerId(), name, visible: true,
       data: filteredGeojson, color: '#ff0000', opacity: 0.7, type: 'geojson',
-      sourceType,
+      sourceType, tableName,
     };
     setLayers(prev => [...prev, newLayer]);
 
@@ -591,7 +592,7 @@ const MapViewerGL: React.FC = () => {
 
   const exportConfiguration = () => {
     const config: MapConfiguration = {
-      version: "1.0.0",
+      version: "2.0.0",
       viewState,
       basemap: mapStyle,
       layers: layers.map(layer => ({

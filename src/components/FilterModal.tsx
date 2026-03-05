@@ -144,11 +144,13 @@ export const FilterModal: React.FC<FilterModalProps> = ({
     let filterInfo: FilterInfo;
     
     if (column.type === 'numeric') {
-      if (comparisonOperator === '=' || singleValue !== '') {
+      if (singleValue !== '') {
         const numValue = Number(singleValue);
+        if (isNaN(numValue)) return;
         filterFn = (item: any) => {
           const itemProps = item.properties || item;
-          const value = itemProps[selectedColumn];
+          const value = Number(itemProps[selectedColumn]);
+          if (isNaN(value)) return false;
           switch (comparisonOperator) {
             case '=': return value === numValue;
             case '<': return value < numValue;

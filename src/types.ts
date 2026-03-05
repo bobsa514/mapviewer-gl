@@ -43,6 +43,7 @@ export interface LayerInfo {
   data: any;
   visible: boolean;
   sourceType?: 'geojson' | 'csv' | 'shapefile' | 'parquet';
+  tableName?: string;
   colorMapping?: {
     column: string;
     numClasses: number;

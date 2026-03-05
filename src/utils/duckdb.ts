@@ -10,7 +10,7 @@
  * Geometry is stored as native GEOMETRY and converted to/from WKT for display.
  */
 
-import type { FeatureCollection, Feature, Geometry, Position } from 'geojson';
+import type { FeatureCollection, Feature, Geometry } from 'geojson';
 import type { LayerInfo } from '../types';
 
 let db: any = null;
@@ -35,15 +35,16 @@ export const initDuckDB = async (): Promise<void> => {
 
   const duckdb = await import('@duckdb/duckdb-wasm');
 
-  // Use jsDelivr CDN bundles
+  // Use jsDelivr CDN bundles — pinned to match installed npm package version
+  const DUCKDB_VERSION = '1.33.1-dev20.0';
   const JSDELIVR_BUNDLES = {
     mvp: {
-      mainModule: 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm',
-      mainWorker: 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js',
+      mainModule: `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${DUCKDB_VERSION}/dist/duckdb-mvp.wasm`,
+      mainWorker: `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${DUCKDB_VERSION}/dist/duckdb-browser-mvp.worker.js`,
     },
     eh: {
-      mainModule: 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm/dist/duckdb-eh.wasm',
-      mainWorker: 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js',
+      mainModule: `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${DUCKDB_VERSION}/dist/duckdb-eh.wasm`,
+      mainWorker: `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${DUCKDB_VERSION}/dist/duckdb-browser-eh.worker.js`,
     },
   };
 
@@ -65,86 +66,6 @@ export const initDuckDB = async (): Promise<void> => {
   await conn.query('INSTALL spatial; LOAD spatial;');
 };
 
-/** Convert a GeoJSON Geometry to WKT string for SQL insertion. Supports 2D Point through MultiPolygon. */
-const geometryToWKT = (geometry: Geometry): string => {
-  const coordToStr = (coord: Position) => `${coord[0]} ${coord[1]}`;
-  const ringToStr = (ring: Position[]) => `(${ring.map(coordToStr).join(', ')})`;
-
-  switch (geometry.type) {
-    case 'Point':
-      return `POINT(${coordToStr(geometry.coordinates)})`;
-    case 'LineString':
-      return `LINESTRING(${geometry.coordinates.map(coordToStr).join(', ')})`;
-    case 'Polygon':
-      return `POLYGON(${geometry.coordinates.map(ringToStr).join(', ')})`;
-    case 'MultiPoint':
-      return `MULTIPOINT(${geometry.coordinates.map(coordToStr).join(', ')})`;
-    case 'MultiLineString':
-      return `MULTILINESTRING(${geometry.coordinates.map(c => `(${c.map(coordToStr).join(', ')})`).join(', ')})`;
-    case 'MultiPolygon':
-      return `MULTIPOLYGON(${geometry.coordinates.map(p => `(${p.map(ringToStr).join(', ')})`).join(', ')})`;
-    default:
-      return '';
-  }
-};
-
-/** Parse a WKT string back into a GeoJSON Geometry. Returns null for unrecognized types. */
-const wktToGeometry = (wkt: string): Geometry | null => {
-  const wktTrimmed = wkt.trim();
-
-  const parseCoord = (s: string): Position => {
-    const parts = s.trim().split(/\s+/).map(Number);
-    return parts;
-  };
-
-  const parseCoordList = (s: string): Position[] => {
-    return s.split(',').map(parseCoord);
-  };
-
-  if (wktTrimmed.startsWith('POINT')) {
-    const coords = wktTrimmed.match(/POINT\s*\(([^)]+)\)/);
-    if (!coords) return null;
-    return { type: 'Point', coordinates: parseCoord(coords[1]) };
-  }
-
-  if (wktTrimmed.startsWith('LINESTRING')) {
-    const coords = wktTrimmed.match(/LINESTRING\s*\((.+)\)/);
-    if (!coords) return null;
-    return { type: 'LineString', coordinates: parseCoordList(coords[1]) };
-  }
-
-  if (wktTrimmed.startsWith('MULTIPOLYGON')) {
-    const inner = wktTrimmed.match(/MULTIPOLYGON\s*\(\(\((.+)\)\)\)/);
-    if (!inner) return null;
-    const polygons = inner[1].split(')),((').map(p =>
-      p.split('),(').map(ring => parseCoordList(ring))
-    );
-    return { type: 'MultiPolygon', coordinates: polygons };
-  }
-
-  if (wktTrimmed.startsWith('POLYGON')) {
-    const inner = wktTrimmed.match(/POLYGON\s*\(\((.+)\)\)/);
-    if (!inner) return null;
-    const rings = inner[1].split('),(').map(ring => parseCoordList(ring));
-    return { type: 'Polygon', coordinates: rings };
-  }
-
-  if (wktTrimmed.startsWith('MULTILINESTRING')) {
-    const inner = wktTrimmed.match(/MULTILINESTRING\s*\(\((.+)\)\)/);
-    if (!inner) return null;
-    const lines = inner[1].split('),(').map(l => parseCoordList(l));
-    return { type: 'MultiLineString', coordinates: lines };
-  }
-
-  if (wktTrimmed.startsWith('MULTIPOINT')) {
-    const inner = wktTrimmed.match(/MULTIPOINT\s*\((.+)\)/);
-    if (!inner) return null;
-    const coords = inner[1].replace(/[()]/g, '').split(',').map(parseCoord);
-    return { type: 'MultiPoint', coordinates: coords };
-  }
-
-  return null;
-};
 
 /** Infer a DuckDB column type (BIGINT, DOUBLE, or VARCHAR) from sample values. */
 const inferColumnType = (values: any[]): string => {
@@ -418,7 +339,8 @@ export const registerParquetFile = async (file: File): Promise<{
   await db.registerFileBuffer(file.name, new Uint8Array(buffer));
 
   await conn.query(`DROP TABLE IF EXISTS "${tableName}"`);
-  await conn.query(`CREATE TABLE "${tableName}" AS SELECT * FROM read_parquet('${file.name}')`);
+  const escapedFileName = file.name.replace(/'/g, "''");
+  await conn.query(`CREATE TABLE "${tableName}" AS SELECT * FROM read_parquet('${escapedFileName}')`);
 
   const descResult = await conn.query(`DESCRIBE "${tableName}"`);
   const rows = descResult.toArray();
@@ -461,9 +383,9 @@ export const extractGeoParquetAsGeoJSON = async (
   // Get all columns except geom
   const descResult = await conn.query(`DESCRIBE "${tableName}"`);
   const allCols = descResult.toArray().map((r: any) => r.column_name as string);
-  const propCols = allCols.filter(c => c !== geomColumn);
+  const propCols = allCols.filter((c: string) => c !== geomColumn);
 
-  const selectCols = propCols.map(c => `"${c}"`).join(', ');
+  const selectCols = propCols.map((c: string) => `"${c}"`).join(', ');
   // If the column is already GEOMETRY, ST_AsGeoJSON works directly.
   // Only use ST_GeomFromWKB for raw BLOB/WKB_GEOMETRY columns.
   const needsWKBConversion = geomColumnType && (geomColumnType === 'BLOB' || geomColumnType === 'WKB_GEOMETRY');
