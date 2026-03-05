@@ -8,8 +8,9 @@ A browser-based geospatial data viewer with SQL-powered analytics. Upload your d
 
 ### Data Formats
 - **GeoJSON** — polygons, lines, points, and multi-geometries
-- **CSV** — auto-detects lat/lng columns or H3 hex indexes
+- **CSV** — auto-detects lat/lng columns or H3 hex indexes; CSVs without coordinates are registered as SQL-only tables for JOINs
 - **Shapefile** — upload a zipped `.shp`/`.dbf`/`.prj` bundle; parsed client-side via [shpjs](https://github.com/calvinmetcalf/shapefile-js)
+- **Parquet / GeoParquet** — GeoParquet files render on the map; plain Parquet files are registered as SQL-only tables for JOINs
 - **Map Configurations** — export/import full map state (layers, styles, filters, view)
 
 ### In-Browser SQL with DuckDB-WASM
@@ -19,6 +20,7 @@ Every data layer you add becomes a queryable SQL table powered by [DuckDB-WASM](
 - **Join layers** — `SELECT a.*, b.name FROM points a JOIN polygons b ON ...`
 - **Spatial operations** — `ST_Within`, `ST_Intersects`, `ST_Buffer`, `ST_Distance`, and more via the [DuckDB Spatial extension](https://duckdb.org/docs/extensions/spatial/overview)
 - **Add results as layers** — query results with geometry columns can be visualized directly on the map
+- **Non-geo tables** — plain CSV and Parquet files without geometry are available as SQL tables for JOINs and analysis
 
 DuckDB is lazy-loaded (~200 KB WASM) only when you open the SQL editor, so it doesn't affect initial page load.
 
@@ -32,7 +34,7 @@ DuckDB is lazy-loaded (~200 KB WASM) only when you open the SQL editor, so it do
 
 ### Layer Management
 - Drag-and-drop file upload via centered modal
-- Toggle visibility, remove, and reorder layers
+- Toggle visibility, remove, and rename layers
 - Column-level filtering with multiple conditions
 - Export/import full map configurations as JSON
 
@@ -55,6 +57,9 @@ Include an H3 index column named: `hex_id`, `h3_index`, `h3`, or `hexagon`. Must
 
 ### Shapefile
 Upload a `.zip` containing `.shp`, `.dbf`, and optionally `.prj` files. Multi-layer ZIPs are merged into a single collection.
+
+### Parquet / GeoParquet
+Upload `.parquet` files. GeoParquet files with a geometry column are rendered on the map. Plain Parquet files without geometry are registered as SQL-only tables, available for JOINs and queries in the SQL editor.
 
 ## Setup
 
@@ -109,7 +114,7 @@ src/
     duckdb.ts               # DuckDB-WASM init, table registration, query execution (code-split)
   components/
     MapViewerGL.tsx          # Main orchestrator — state management, deck.gl rendering
-    AddDataModal.tsx         # Tabbed file upload modal (GeoJSON, CSV, Shapefile, Config)
+    AddDataModal.tsx         # Tabbed file upload modal (GeoJSON, CSV, Shapefile, Parquet, Config)
     SQLEditor.tsx            # Split-pane SQL editor with results table
     LayersPanel.tsx          # Layer list with symbology controls
     FilterModal.tsx          # Column-level data filtering

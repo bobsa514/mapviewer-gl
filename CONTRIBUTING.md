@@ -49,7 +49,8 @@ DuckDB is a major feature that enables SQL analytics on map layers. Key things t
 - **Blob Worker** — a blob wrapper is used for the Web Worker to avoid cross-origin restrictions
 - **Spatial extension** — loaded on init for `ST_*` functions (spatial joins, buffers, etc.)
 - **Auto type inference** — `registerLayer()` samples up to 100 rows to determine column types (BIGINT, DOUBLE, or VARCHAR)
-- **Geometry handling** — stored as native GEOMETRY via `ST_GeomFromText(WKT)`; converted back with `ST_AsText()` for display and GeoJSON export
+- **Geometry handling** — stored as native GEOMETRY via `ST_GeomFromGeoJSON()`; converted back with `ST_AsGeoJSON()` for display and GeoJSON export
+- **Parquet support** — GeoParquet files are read via `read_parquet()` with auto-detection of geometry columns; plain Parquet files are registered as SQL-only tables
 - **COOP/COEP headers** — required for SharedArrayBuffer (DuckDB threading); configured in `vite.config.ts` for dev server
 
 ### Shapefile Support
@@ -75,7 +76,7 @@ Open an issue describing the use case and proposed solution. For large features,
 1. Fork the repo and create a branch from `main`
 2. Make your changes
 3. Run `yarn build` to verify no build errors
-4. Test manually with sample data (GeoJSON, CSV, shapefile)
+4. Test manually with sample data (GeoJSON, CSV, Shapefile, Parquet)
 5. If you changed DuckDB integration, test SQL queries including spatial operations
 6. Submit a pull request with a clear description of what changed and why
 
@@ -102,7 +103,7 @@ Here are some areas where contributions would be particularly valuable:
 
 - **Performance** — Arrow-based ingestion for DuckDB instead of string INSERTs for large datasets
 - **3D geometry** — Z/M coordinate support in WKT converters
-- **Additional formats** — GeoPackage, KML, TopoJSON
+- **Additional formats** — GeoPackage, KML, TopoJSON, FlatGeobuf
 - **Testing** — unit tests for utilities, integration tests for data pipelines
 - **Accessibility** — keyboard navigation, screen reader support
 - **Mobile** — responsive layout and touch interactions
