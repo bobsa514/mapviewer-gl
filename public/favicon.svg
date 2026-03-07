@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Globe circle -->
+  <circle cx="16" cy="16" r="14" fill="#3B82F6" opacity="0.15"/>
+  <circle cx="16" cy="16" r="14" stroke="#3B82F6" stroke-width="1.5" fill="none"/>
+  <!-- Globe lines - horizontal -->
+  <ellipse cx="16" cy="16" rx="14" ry="5" stroke="#3B82F6" stroke-width="1" fill="none" opacity="0.5"/>
+  <!-- Globe lines - vertical -->
+  <ellipse cx="16" cy="16" rx="5" ry="14" stroke="#3B82F6" stroke-width="1" fill="none" opacity="0.5"/>
+  <!-- Equator -->
+  <line x1="2" y1="16" x2="30" y2="16" stroke="#3B82F6" stroke-width="0.75" opacity="0.4"/>
+  <!-- Prime meridian -->
+  <line x1="16" y1="2" x2="16" y2="30" stroke="#3B82F6" stroke-width="0.75" opacity="0.4"/>
+  <!-- Map pin -->
+  <g transform="translate(18, 8)">
+    <path d="M6 0C2.686 0 0 2.686 0 6c0 4.5 6 10 6 10s6-5.5 6-10c0-3.314-2.686-6-6-6z" fill="#2563EB"/>
+    <circle cx="6" cy="6" r="2.5" fill="white"/>
+  </g>
+</svg>

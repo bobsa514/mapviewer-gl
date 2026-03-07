@@ -3,7 +3,7 @@ import DeckGL from '@deck.gl/react';
 import { Map } from 'react-map-gl/maplibre';
 import { GeoJsonLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { MapViewState } from '@deck.gl/core';
-import type { FeatureCollection, Feature, Geometry } from 'geojson';
+import type { FeatureCollection, Feature } from 'geojson';
 import Papa from 'papaparse';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
 import * as h3 from 'h3-js';
@@ -13,6 +13,7 @@ import { basemapOptions } from '../types';
 import { calculateBounds, hexToRGB, getColorForValue, getSizeForValue } from '../utils/geometry';
 import { detectCoordinateColumns, detectH3Column, isValidH3Index, processChunk } from '../utils/csv';
 import { getNumericValuesForColumn } from '../utils/layers';
+import { sanitizeTableName } from '../utils/duckdb';
 
 import { FilterModal } from './FilterModal';
 import { CSVPreviewModal } from './CSVPreviewModal';
@@ -23,6 +24,7 @@ import { LegendDisplay } from './LegendDisplay';
 import { LayersPanel } from './LayersPanel';
 import { AddDataModal } from './AddDataModal';
 import { SQLEditor } from './SQLEditor';
+import { useToast, ToastContainer } from './Toast';
 
 const INITIAL_VIEW_STATE: MapViewState = {
   latitude: 39.8283,
@@ -57,14 +59,25 @@ const MapViewerGL: React.FC = () => {
   const pendingGeoJSONNameRef = useRef<string>('shapefile_layer');
   const [isFeatureLocked, setIsFeatureLocked] = useState(false);
 
+  // Toast notifications
+  const { toasts, addToast, removeToast } = useToast();
+
   // DuckDB state
   const [registeredTables, setRegisteredTables] = useState<string[]>([]);
+  const registeredTablesRef = useRef<string[]>([]);
   const [isDuckDBReady, setIsDuckDBReady] = useState(false);
   const [showSQLEditor, setShowSQLEditor] = useState(false);
   const [duckdbOnlyTables, setDuckdbOnlyTables] = useState<DuckDBOnlyTable[]>([]);
+  const [layerToDelete, setLayerToDelete] = useState<number | null>(null);
+  const [pendingConfigData, setPendingConfigData] = useState<any>(null);
 
   const handleDuckDBReady = useCallback(() => {
     setIsDuckDBReady(true);
+  }, []);
+
+  const updateRegisteredTables = useCallback((newTables: string[]) => {
+    registeredTablesRef.current = newTables;
+    setRegisteredTables(newTables);
   }, []);
 
   // Track which layer names are present to avoid re-syncing on non-structural changes
@@ -76,7 +89,7 @@ const MapViewerGL: React.FC = () => {
     if (!isDuckDBReady) return;
 
     // Only sync when layers are added/removed, not when properties (color, opacity, etc.) change
-    const layerNamesKey = layers.map(l => l.tableName || l.name).sort().join('\0');
+    const layerNamesKey = layers.map(l => l.tableName!).sort().join('\0');
     const duckdbNamesKey = duckdbOnlyTables.map(t => t.tableName).sort().join('\0');
     if (layerNamesKey === layerNamesRef.current && duckdbNamesKey === duckdbOnlyNamesRef.current) return;
     layerNamesRef.current = layerNamesKey;
@@ -84,18 +97,19 @@ const MapViewerGL: React.FC = () => {
 
     const syncTables = async () => {
       try {
-        const { registerLayer, unregisterLayer, sanitizeTableName } = await import('../utils/duckdb');
+        const { registerLayer, unregisterLayer } = await import('../utils/duckdb');
 
         const duckdbOnlyNames = duckdbOnlyTables.map(t => t.tableName);
         const layersToRegister = layers.filter(l => l.sourceType !== 'parquet');
-        const currentLayerTableNames = layersToRegister.map(l => l.tableName || sanitizeTableName(l.name));
-        const parquetLayerTableNames = layers.filter(l => l.sourceType === 'parquet').map(l => l.tableName || sanitizeTableName(l.name));
+        // All layers should have tableName set at creation time — never call sanitizeTableName here
+        const currentLayerTableNames = layersToRegister.map(l => l.tableName!);
+        const parquetLayerTableNames = layers.filter(l => l.sourceType === 'parquet').map(l => l.tableName!);
         const allCurrentTableNames = [...currentLayerTableNames, ...parquetLayerTableNames, ...duckdbOnlyNames];
 
         // Register new layers (per-layer try-catch so one failure doesn't block others)
         for (const layer of layersToRegister) {
-          const tableName = layer.tableName || sanitizeTableName(layer.name);
-          if (!registeredTables.includes(tableName)) {
+          const tableName = layer.tableName!;
+          if (!registeredTablesRef.current.includes(tableName)) {
             try {
               await registerLayer(layer, tableName);
             } catch (err) {
@@ -105,7 +119,7 @@ const MapViewerGL: React.FC = () => {
         }
 
         // Unregister removed layers
-        for (const tableName of registeredTables) {
+        for (const tableName of registeredTablesRef.current) {
           if (!allCurrentTableNames.includes(tableName)) {
             try {
               await unregisterLayer(tableName);
@@ -116,7 +130,7 @@ const MapViewerGL: React.FC = () => {
         }
 
         // Always update registered tables list
-        setRegisteredTables(allCurrentTableNames);
+        updateRegisteredTables(allCurrentTableNames);
       } catch {
         // DuckDB not loaded yet, skip sync
       }
@@ -191,7 +205,7 @@ const MapViewerGL: React.FC = () => {
         });
       } catch (error) {
         console.error('Error parsing CSV:', error);
-        alert(error instanceof Error ? error.message : 'Error parsing CSV file');
+        addToast('error', error instanceof Error ? error.message : 'Error parsing CSV file');
         setCsvPreview(null);
       }
     };
@@ -222,10 +236,12 @@ const MapViewerGL: React.FC = () => {
         setDuckdbOnlyTables(prev => [...prev, {
           tableName, fileName: file.name, sourceType: 'csv', columns,
         }]);
-        setRegisteredTables(prev => prev.includes(tableName) ? prev : [...prev, tableName]);
+        if (!registeredTablesRef.current.includes(tableName)) {
+          updateRegisteredTables([...registeredTablesRef.current, tableName]);
+        }
       } catch (error) {
         console.error('Error registering CSV table:', error);
-        alert(error instanceof Error ? error.message : 'Error registering CSV table');
+        addToast('error', error instanceof Error ? error.message : 'Error registering CSV table');
       } finally {
         setIsLoading(false);
         setCsvPreview(null);
@@ -263,7 +279,8 @@ const MapViewerGL: React.FC = () => {
 
           const newLayer: LayerInfo = {
             id: getNextLayerId(), name: file.name, visible: true,
-            data: hexagons, color: '#ff0000', opacity: 0.7, type: 'h3'
+            data: hexagons, color: '#ff0000', opacity: 0.7, type: 'h3',
+            tableName: sanitizeTableName(file.name),
           };
           setLayers(prev => [...prev, newLayer]);
 
@@ -280,7 +297,7 @@ const MapViewerGL: React.FC = () => {
           const CHUNK_SIZE = 10000;
           let currentIndex = 1;
           let allData: any[] = [];
-          let bounds = { minLat: Infinity, maxLat: -Infinity, minLng: Infinity, maxLng: -Infinity };
+          const bounds = { minLat: Infinity, maxLat: -Infinity, minLng: Infinity, maxLng: -Infinity };
 
           while (currentIndex < rows.length) {
             const { data: chunkData, endIndex } = processChunk(
@@ -307,14 +324,15 @@ const MapViewerGL: React.FC = () => {
           const newLayer: LayerInfo = {
             id: getNextLayerId(), name: file.name, visible: true,
             data: allData, color: '#ff0000', opacity: 0.7, type: 'point',
-            columns: coordinates, pointSize: 5
+            columns: coordinates, pointSize: 5,
+            tableName: sanitizeTableName(file.name),
           };
           setLayers(prev => [...prev, newLayer]);
           setViewState({ latitude: centerLat, longitude: centerLng, zoom });
         }
       } catch (error) {
         console.error('Error processing CSV:', error);
-        alert(error instanceof Error ? error.message : 'Error processing CSV file');
+        addToast('error', error instanceof Error ? error.message : 'Error processing CSV file');
       } finally {
         setIsLoading(false);
         setLoadingProgress(100);
@@ -348,7 +366,7 @@ const MapViewerGL: React.FC = () => {
         });
       } catch (error) {
         console.error('Error parsing GeoJSON:', error);
-        alert(error instanceof Error ? error.message : 'Error parsing GeoJSON file');
+        addToast('error', error instanceof Error ? error.message : 'Error parsing GeoJSON file');
       }
     };
     reader.readAsText(file);
@@ -383,7 +401,7 @@ const MapViewerGL: React.FC = () => {
         });
       } catch (error) {
         console.error('Error parsing shapefile:', error);
-        alert(error instanceof Error ? error.message : 'Error parsing shapefile');
+        addToast('error', error instanceof Error ? error.message : 'Error parsing shapefile');
       } finally {
         setIsLoading(false);
         setLoadingProgress(100);
@@ -404,18 +422,34 @@ const MapViewerGL: React.FC = () => {
       if (geomColumn) {
         // GeoParquet → extract geometry and add as map layer
         const fc = await extractGeoParquetAsGeoJSON(tableName, geomColumn, geomColumnType);
+        if (fc.features.length === 0) {
+          addToast('warning', `No valid geometries found in ${file.name}. Registered as SQL-only table.`);
+          setDuckdbOnlyTables(prev => [...prev, {
+            tableName,
+            fileName: file.name,
+            sourceType: 'parquet' as const,
+            columns,
+          }]);
+          updateRegisteredTables([...registeredTablesRef.current, tableName]);
+          setIsLoading(false);
+          return;
+        }
         addGeoJSONLayer(fc, new Set(Object.keys(fc.features[0]?.properties || {})), file.name, 'parquet', tableName);
-        setRegisteredTables(prev => prev.includes(tableName) ? prev : [...prev, tableName]);
+        if (!registeredTablesRef.current.includes(tableName)) {
+          updateRegisteredTables([...registeredTablesRef.current, tableName]);
+        }
       } else {
         // Plain Parquet → DuckDB-only table
         setDuckdbOnlyTables(prev => [...prev, {
           tableName, fileName: file.name, sourceType: 'parquet', columns,
         }]);
-        setRegisteredTables(prev => prev.includes(tableName) ? prev : [...prev, tableName]);
+        if (!registeredTablesRef.current.includes(tableName)) {
+          updateRegisteredTables([...registeredTablesRef.current, tableName]);
+        }
       }
     } catch (error) {
       console.error('Error processing Parquet file:', error);
-      alert(error instanceof Error ? error.message : 'Error processing Parquet file');
+      addToast('error', error instanceof Error ? error.message : 'Error processing Parquet file');
     } finally {
       setIsLoading(false);
     }
@@ -430,7 +464,7 @@ const MapViewerGL: React.FC = () => {
       // Ignore if DuckDB not ready
     }
     setDuckdbOnlyTables(prev => prev.filter(t => t.tableName !== tableName));
-    setRegisteredTables(prev => prev.filter(t => t !== tableName));
+    updateRegisteredTables(registeredTablesRef.current.filter(t => t !== tableName));
   }, []);
 
   const toggleGeoJSONPropertySelection = (property: string) => {
@@ -465,7 +499,7 @@ const MapViewerGL: React.FC = () => {
         addGeoJSONLayer(geojson, geoJSONPreview.selectedProperties, file.name);
       } catch (error) {
         console.error('Error processing GeoJSON:', error);
-        alert(error instanceof Error ? error.message : 'Error processing GeoJSON file');
+        addToast('error', error instanceof Error ? error.message : 'Error processing GeoJSON file');
       } finally {
         setIsLoading(false);
         setLoadingProgress(100);
@@ -479,7 +513,11 @@ const MapViewerGL: React.FC = () => {
     reader.readAsText(file);
   };
 
-  const addGeoJSONLayer = (geojson: FeatureCollection, selectedProperties: Set<string>, name: string, sourceType?: LayerInfo['sourceType'], tableName?: string) => {
+  const addGeoJSONLayer = (geojson: FeatureCollection, selectedProperties: Set<string>, name: string, sourceType?: LayerInfo['sourceType'], existingTableName?: string) => {
+    // Always ensure a stable tableName is set at layer creation time
+    // so syncTables never needs to call sanitizeTableName (which has dedup side effects)
+    const tableName = existingTableName || sanitizeTableName(name);
+
     const filteredGeojson: FeatureCollection = {
       ...geojson,
       features: geojson.features.map(feature => ({
@@ -508,6 +546,79 @@ const MapViewerGL: React.FC = () => {
   };
 
   // ---- Config handling ----
+  // Extracted config-apply logic so it can be reused by the confirmation dialog
+  const applyConfig = useCallback((config: MapConfiguration) => {
+    setLayers([]);
+    setActiveFilters({});
+    setSelectedFeature(null);
+    setSelectedColumns([]);
+    setViewState(config.viewState);
+    setMapStyle(config.basemap);
+
+    const importedIds = config.layers.map(() => getNextLayerId());
+    const newFilters: {[layerId: number]: { fn: (item: any) => boolean, info: FilterInfo }[]} = {};
+
+    config.layers.forEach((layerConfig, index) => {
+      if (layerConfig.filters && layerConfig.filters.length > 0) {
+        newFilters[importedIds[index]] = layerConfig.filters.map(filterInfo => ({
+          fn: (item: any) => {
+            const value = item.properties?.[filterInfo.column];
+            if (filterInfo.type === 'numeric') {
+              const numValue = parseFloat(value);
+              if (filterInfo.value.type === 'range') {
+                return numValue >= filterInfo.value.min && numValue <= filterInfo.value.max;
+              } else if (filterInfo.value.type === 'comparison') {
+                const compValue = parseFloat(String(filterInfo.value.value));
+                switch (filterInfo.value.operator) {
+                  case '<': return numValue < compValue;
+                  case '<=': return numValue <= compValue;
+                  case '>': return numValue > compValue;
+                  case '>=': return numValue >= compValue;
+                  case '=': return numValue === compValue;
+                  default: return true;
+                }
+              }
+            } else if (filterInfo.type === 'text') {
+              const strValue = String(value).toLowerCase();
+              if (filterInfo.value.type === 'multiple') {
+                return filterInfo.value.values.some(v => strValue.includes(v.toLowerCase()));
+              } else if (filterInfo.value.type === 'comparison') {
+                const compValue = String(filterInfo.value.value).toLowerCase();
+                switch (filterInfo.value.operator) {
+                  case '=': return strValue === compValue;
+                  case '<': return strValue < compValue;
+                  case '<=': return strValue <= compValue;
+                  case '>': return strValue > compValue;
+                  case '>=': return strValue >= compValue;
+                  default: return true;
+                }
+              }
+            }
+            return true;
+          },
+          info: filterInfo
+        }));
+      }
+    });
+    setActiveFilters(newFilters);
+
+    const newLayers = config.layers.map((layerConfig, index) => ({
+      id: importedIds[index],
+      name: layerConfig.name,
+      type: layerConfig.type,
+      visible: layerConfig.visible,
+      color: layerConfig.color,
+      opacity: layerConfig.opacity,
+      pointSize: layerConfig.pointSize,
+      columns: layerConfig.columns,
+      data: layerConfig.data,
+      isExpanded: false,
+      colorMapping: layerConfig.colorMapping,
+      sizeMapping: layerConfig.sizeMapping
+    }));
+    setLayers(newLayers);
+  }, [getNextLayerId]);
+
   const handleConfigFile = useCallback(async (file: File) => {
     setShowAddDataModal(false);
     try {
@@ -515,80 +626,18 @@ const MapViewerGL: React.FC = () => {
       const config: MapConfiguration = JSON.parse(text);
       if (!config.version) throw new Error('Invalid configuration file');
 
-      setLayers([]);
-      setActiveFilters({});
-      setSelectedFeature(null);
-      setSelectedColumns([]);
-      setViewState(config.viewState);
-      setMapStyle(config.basemap);
+      // If layers already exist, show confirmation dialog instead of applying immediately
+      if (layers.length > 0) {
+        setPendingConfigData(config);
+        return;
+      }
 
-      const importedIds = config.layers.map(() => getNextLayerId());
-      const newFilters: {[layerId: number]: { fn: (item: any) => boolean, info: FilterInfo }[]} = {};
-
-      config.layers.forEach((layerConfig, index) => {
-        if (layerConfig.filters && layerConfig.filters.length > 0) {
-          newFilters[importedIds[index]] = layerConfig.filters.map(filterInfo => ({
-            fn: (item: any) => {
-              const value = item.properties?.[filterInfo.column];
-              if (filterInfo.type === 'numeric') {
-                const numValue = parseFloat(value);
-                if (filterInfo.value.type === 'range') {
-                  return numValue >= filterInfo.value.min && numValue <= filterInfo.value.max;
-                } else if (filterInfo.value.type === 'comparison') {
-                  const compValue = parseFloat(String(filterInfo.value.value));
-                  switch (filterInfo.value.operator) {
-                    case '<': return numValue < compValue;
-                    case '<=': return numValue <= compValue;
-                    case '>': return numValue > compValue;
-                    case '>=': return numValue >= compValue;
-                    case '=': return numValue === compValue;
-                    default: return true;
-                  }
-                }
-              } else if (filterInfo.type === 'text') {
-                const strValue = String(value).toLowerCase();
-                if (filterInfo.value.type === 'multiple') {
-                  return filterInfo.value.values.some(v => strValue.includes(v.toLowerCase()));
-                } else if (filterInfo.value.type === 'comparison') {
-                  const compValue = String(filterInfo.value.value).toLowerCase();
-                  switch (filterInfo.value.operator) {
-                    case '=': return strValue === compValue;
-                    case '<': return strValue < compValue;
-                    case '<=': return strValue <= compValue;
-                    case '>': return strValue > compValue;
-                    case '>=': return strValue >= compValue;
-                    default: return true;
-                  }
-                }
-              }
-              return true;
-            },
-            info: filterInfo
-          }));
-        }
-      });
-      setActiveFilters(newFilters);
-
-      const newLayers = config.layers.map((layerConfig, index) => ({
-        id: importedIds[index],
-        name: layerConfig.name,
-        type: layerConfig.type,
-        visible: layerConfig.visible,
-        color: layerConfig.color,
-        opacity: layerConfig.opacity,
-        pointSize: layerConfig.pointSize,
-        columns: layerConfig.columns,
-        data: layerConfig.data,
-        isExpanded: false,
-        colorMapping: layerConfig.colorMapping,
-        sizeMapping: layerConfig.sizeMapping
-      }));
-      setLayers(newLayers);
+      applyConfig(config);
     } catch (error) {
       console.error('Error importing configuration:', error);
-      alert('Error importing configuration file');
+      addToast('error', 'Error importing configuration file');
     }
-  }, [getNextLayerId]);
+  }, [getNextLayerId, layers.length, applyConfig]);
 
   const exportConfiguration = () => {
     const config: MapConfiguration = {
@@ -650,6 +699,15 @@ const MapViewerGL: React.FC = () => {
   const renameLayer = (layerId: number, newName: string) => {
     setLayers(prev => prev.map(l => l.id === layerId ? { ...l, name: newName } : l));
   };
+
+  const reorderLayers = useCallback((fromIndex: number, toIndex: number) => {
+    setLayers(prev => {
+      const updated = [...prev];
+      const [moved] = updated.splice(fromIndex, 1);
+      updated.splice(toIndex, 0, moved);
+      return updated;
+    });
+  }, []);
 
   const toggleLayerExpanded = (layerId: number) => {
     setLayers(prev => prev.map(l => l.id === layerId ? { ...l, isExpanded: !l.isExpanded } : l));
@@ -741,12 +799,6 @@ const MapViewerGL: React.FC = () => {
 
   // ---- Render deck.gl layers ----
   const deckLayers = React.useMemo(() => {
-    const getGeometryKey = (geometry: Geometry): string => {
-      if ('coordinates' in geometry) return JSON.stringify(geometry.coordinates);
-      if (geometry.type === 'GeometryCollection') return JSON.stringify(geometry.geometries.map(g => getGeometryKey(g)));
-      return '';
-    };
-
     return layers.filter(layer => layer.visible).map((layer: LayerInfo) => {
       const [r, g, b] = hexToRGB(layer.color);
 
@@ -789,10 +841,17 @@ const MapViewerGL: React.FC = () => {
             }
           },
           onHover: (info: any) => {
-            if (!isFeatureLockedRef.current && info.object) {
-              setSelectedFeature({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [h3.cellToBoundary(info.object.hex).map(([lat, lng]: [number, number]) => [lng, lat])] }, properties: info.object.properties } as Feature);
-            } else if (!isFeatureLockedRef.current) {
-              setSelectedFeature(null);
+            if (!isFeatureLockedRef.current) {
+              if (info.object) {
+                // Only update if it's a different feature (compare by properties reference)
+                const currentProps = selectedFeatureRef.current?.properties;
+                const newProps = info.object.properties;
+                if (currentProps !== newProps) {
+                  setSelectedFeature({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [h3.cellToBoundary(info.object.hex).map(([lat, lng]: [number, number]) => [lng, lat])] }, properties: info.object.properties } as Feature);
+                }
+              } else if (selectedFeatureRef.current) {
+                setSelectedFeature(null);
+              }
             }
           }
         });
@@ -842,9 +901,18 @@ const MapViewerGL: React.FC = () => {
             }
           },
           onHover: (info: any) => {
-            if (!isFeatureLockedRef.current && info.object) {
-              setSelectedFeature({ type: 'Feature', geometry: { type: 'Point', coordinates: info.object.position }, properties: info.object.properties } as Feature);
-            } else if (!isFeatureLockedRef.current) { setSelectedFeature(null); }
+            if (!isFeatureLockedRef.current) {
+              if (info.object) {
+                // Only update if it's a different feature (compare by properties reference)
+                const currentProps = selectedFeatureRef.current?.properties;
+                const newProps = info.object.properties;
+                if (currentProps !== newProps) {
+                  setSelectedFeature({ type: 'Feature', geometry: { type: 'Point', coordinates: info.object.position }, properties: info.object.properties } as Feature);
+                }
+              } else if (selectedFeatureRef.current) {
+                setSelectedFeature(null);
+              }
+            }
           }
         });
       }
@@ -890,8 +958,16 @@ const MapViewerGL: React.FC = () => {
           }
         },
         onHover: (info: any) => {
-          if (!isFeatureLockedRef.current && info.object) setSelectedFeature(info.object);
-          else if (!isFeatureLockedRef.current) setSelectedFeature(null);
+          if (!isFeatureLockedRef.current) {
+            if (info.object) {
+              // Only update if it's a different feature (compare by reference)
+              if (info.object !== selectedFeatureRef.current) {
+                setSelectedFeature(info.object);
+              }
+            } else if (selectedFeatureRef.current) {
+              setSelectedFeature(null);
+            }
+          }
         }
       });
     });
@@ -905,6 +981,7 @@ const MapViewerGL: React.FC = () => {
           <button
             onClick={() => setShowAddDataModal(true)}
             className="w-full p-3 flex items-center justify-center hover:bg-gray-50 rounded-lg transition-colors"
+            aria-label="Add data"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -929,9 +1006,16 @@ const MapViewerGL: React.FC = () => {
 
       {/* Loading overlay */}
       {isLoading && (
-        <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg px-8 py-4">
-            <p className="text-lg font-medium text-gray-700">Processing... {Math.round(loadingProgress)}%</p>
+        <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-xl px-8 py-6 shadow-xl min-w-[280px]">
+            <p className="text-base font-medium text-gray-700 mb-3">Processing...</p>
+            <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out"
+                style={{ width: `${Math.max(5, Math.round(loadingProgress))}%` }}
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-2 text-center">{Math.round(loadingProgress)}%</p>
           </div>
         </div>
       )}
@@ -955,6 +1039,7 @@ const MapViewerGL: React.FC = () => {
             onClick={() => setShowLayers(!showLayers)}
             className={`p-2 rounded-lg shadow-lg transition-colors ${showLayers ? 'bg-blue-50 text-blue-600' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
             title={showLayers ? "Hide Layers" : "Show Layers"}
+            aria-label={showLayers ? "Hide layers panel" : "Show layers panel"}
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
@@ -964,11 +1049,24 @@ const MapViewerGL: React.FC = () => {
             onClick={() => setShowSQLEditor(!showSQLEditor)}
             className={`p-2 rounded-lg shadow-lg transition-colors ${showSQLEditor ? 'bg-blue-50 text-blue-600' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
             title={showSQLEditor ? "Hide SQL Editor" : "Show SQL Editor"}
+            aria-label={showSQLEditor ? "Hide SQL editor" : "Show SQL editor"}
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
             </svg>
           </button>
+          {layers.length > 0 && (
+            <button
+              onClick={exportConfiguration}
+              className="p-2 rounded-lg shadow-lg bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition-colors"
+              title="Export configuration"
+              aria-label="Export map configuration"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 
@@ -979,7 +1077,7 @@ const MapViewerGL: React.FC = () => {
           <LayersPanel
             layers={layers}
             onToggle={toggleLayer}
-            onRemove={removeLayer}
+            onRemove={(id) => setLayerToDelete(id)}
             onToggleExpanded={toggleLayerExpanded}
             onUpdateColor={updateLayerColor}
             onUpdateOpacity={updateLayerOpacity}
@@ -990,6 +1088,10 @@ const MapViewerGL: React.FC = () => {
             onClearSizeMapping={clearLayerSizeMapping}
             onOpenFilter={(layerId) => setShowFilterModal(layerId)}
             onRename={renameLayer}
+            onReorder={reorderLayers}
+            activeFilterCounts={Object.fromEntries(
+              Object.entries(activeFilters).map(([id, filters]) => [Number(id), filters.length])
+            )}
           />
         </div>
       )}
@@ -1032,6 +1134,24 @@ const MapViewerGL: React.FC = () => {
       >
         <Map mapStyle={mapStyle as any} />
       </DeckGL>
+
+      {/* Welcome overlay — shown when no data is loaded */}
+      {layers.length === 0 && duckdbOnlyTables.length === 0 && !showAddDataModal && !isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center z-[5] pointer-events-none">
+          <div className="bg-white/90 backdrop-blur-sm rounded-2xl p-8 shadow-lg text-center pointer-events-auto max-w-md mx-4">
+            <div className="text-4xl mb-4">🗺️</div>
+            <h2 className="text-xl font-semibold text-gray-800 mb-2">Welcome to MapViewer-GL</h2>
+            <p className="text-gray-500 mb-6 text-sm">Upload GeoJSON, CSV, Shapefile, or Parquet files to visualize your geospatial data. All processing happens locally in your browser.</p>
+            <button
+              onClick={() => setShowAddDataModal(true)}
+              className="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors text-sm"
+            >
+              Add Data
+            </button>
+            <p className="text-xs text-gray-400 mt-4">No data leaves your browser</p>
+          </div>
+        </div>
+      )}
 
       {/* Legends */}
       <LegendDisplay layers={layers} />
@@ -1091,6 +1211,49 @@ const MapViewerGL: React.FC = () => {
           onRemoveDuckDBOnlyTable={handleRemoveDuckDBOnlyTable}
         />
       )}
+      {/* Delete layer confirmation dialog */}
+      {layerToDelete !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70]" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-xl p-6 shadow-xl max-w-sm mx-4">
+            <h3 className="text-base font-semibold text-gray-800 mb-2">Remove Layer</h3>
+            <p className="text-sm text-gray-500 mb-5">
+              Remove &quot;{layers.find(l => l.id === layerToDelete)?.name || 'this layer'}&quot;? This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setLayerToDelete(null)}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { removeLayer(layerToDelete); setLayerToDelete(null); }}
+                className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Config import confirmation dialog */}
+      {pendingConfigData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70]" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-xl p-6 shadow-xl max-w-sm mx-4">
+            <h3 className="text-base font-semibold text-gray-800 mb-2">Import Configuration</h3>
+            <p className="text-sm text-gray-500 mb-5">
+              This will replace all current layers and settings. Continue?
+            </p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setPendingConfigData(null)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+              <button onClick={() => { applyConfig(pendingConfigData); setPendingConfigData(null); }} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Import</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
     </div>
   );
 };

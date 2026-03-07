@@ -16,14 +16,32 @@ import type { LayerInfo } from '../types';
 let db: any = null;
 let conn: any = null;
 
+/** Track registered table names to avoid collisions when uploading files with the same name. */
+const registeredTableNames = new Set<string>();
+
 /** Convert a layer/file name into a safe SQL table identifier (lowercase, underscores). */
-export const sanitizeTableName = (name: string): string => {
-  return name
+export const sanitizeTableName = (name: string, deduplicate = true): string => {
+  const base = name
     .replace(/\.[^.]+$/, '') // remove file extension
     .replace(/[^a-zA-Z0-9_]/g, '_') // replace non-alphanumeric
     .replace(/^(\d)/, '_$1') // prefix if starts with digit
     .toLowerCase();
+
+  if (!deduplicate) return base;
+
+  let candidate = base;
+  let counter = 1;
+  while (registeredTableNames.has(candidate)) {
+    candidate = `${base}_${counter}`;
+    counter++;
+  }
+  registeredTableNames.add(candidate);
+  return candidate;
 };
+
+/** Escape a column name for safe use in SQL identifiers (double-quote escaping). */
+const escapeIdentifier = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+
 
 /**
  * Initialize DuckDB-WASM with the Spatial extension.
@@ -95,7 +113,18 @@ const inferColumnType = (values: any[]): string => {
 const inferColumnTypes = (items: any[], getProps: (item: any) => Record<string, any>): Record<string, string> => {
   const sampleSize = Math.min(items.length, 100);
   const sample = items.slice(0, sampleSize);
-  const propColumns = Object.keys(getProps(items[0]) || {});
+
+  // Scan all sample items to discover property keys (handles null/sparse properties)
+  const propColumnsSet = new Set<string>();
+  for (const item of sample) {
+    const props = getProps(item);
+    if (props) {
+      for (const key of Object.keys(props)) {
+        propColumnsSet.add(key);
+      }
+    }
+  }
+  const propColumns = Array.from(propColumnsSet);
 
   const types: Record<string, string> = {};
   for (const col of propColumns) {
@@ -131,7 +160,7 @@ export const registerLayer = async (layer: LayerInfo, tableName: string): Promis
 
     const colTypes = inferColumnTypes(features, f => f.properties || {});
     const propColumns = Object.keys(colTypes);
-    const colDefs = propColumns.map(col => `"${col}" ${colTypes[col]}`).join(', ');
+    const colDefs = propColumns.map(col => `${escapeIdentifier(col)} ${colTypes[col]}`).join(', ');
 
     await conn.query(`CREATE TABLE "${tableName}" (${colDefs}${colDefs ? ', ' : ''}geom GEOMETRY)`);
 
@@ -151,7 +180,7 @@ export const registerLayer = async (layer: LayerInfo, tableName: string): Promis
 
     const colTypes = inferColumnTypes(data, d => d.properties || {});
     const propColumns = Object.keys(colTypes);
-    const colDefs = propColumns.map(col => `"${col}" ${colTypes[col]}`).join(', ');
+    const colDefs = propColumns.map(col => `${escapeIdentifier(col)} ${colTypes[col]}`).join(', ');
 
     await conn.query(`CREATE TABLE "${tableName}" (${colDefs}${colDefs ? ', ' : ''}geom GEOMETRY)`);
 
@@ -171,7 +200,7 @@ export const registerLayer = async (layer: LayerInfo, tableName: string): Promis
 
     const colTypes = inferColumnTypes(data, d => d.properties || {});
     const propColumns = Object.keys(colTypes);
-    const colDefs = propColumns.map(col => `"${col}" ${colTypes[col]}`).join(', ');
+    const colDefs = propColumns.map(col => `${escapeIdentifier(col)} ${colTypes[col]}`).join(', ');
 
     await conn.query(`CREATE TABLE "${tableName}" (hex_id VARCHAR${colDefs ? ', ' : ''}${colDefs})`);
 
@@ -191,6 +220,7 @@ export const registerLayer = async (layer: LayerInfo, tableName: string): Promis
 export const unregisterLayer = async (tableName: string): Promise<void> => {
   if (!conn) return;
   await conn.query(`DROP TABLE IF EXISTS "${tableName}"`);
+  registeredTableNames.delete(tableName);
 };
 
 export interface QueryResult {
@@ -252,11 +282,11 @@ export const executeQuery = async (sql: string): Promise<QueryResult> => {
   if (geomColNames.length > 0) {
     // Query for table display: convert geom to WKT text
     const displaySql = `SELECT ${initialColumns.map(col =>
-      geomColNames.includes(col) ? `ST_AsText("${col}") as "${col}"` : `"${col}"`
+      geomColNames.includes(col) ? `ST_AsText(${escapeIdentifier(col)}) as ${escapeIdentifier(col)}` : escapeIdentifier(col)
     ).join(', ')} FROM (${sql}) AS __user_query`;
     // Query for GeoJSON extraction: convert geom to GeoJSON strings
     const geojsonSql = `SELECT ${initialColumns.map(col =>
-      geomColNames.includes(col) ? `ST_AsGeoJSON("${col}") as "${col}"` : `"${col}"`
+      geomColNames.includes(col) ? `ST_AsGeoJSON(${escapeIdentifier(col)}) as ${escapeIdentifier(col)}` : escapeIdentifier(col)
     ).join(', ')} FROM (${sql}) AS __user_query`;
     try {
       result = await conn.query(displaySql);
@@ -356,9 +386,14 @@ export const registerParquetFile = async (file: File): Promise<{
 
     if (!geomColumn) {
       const nameLower = colName.toLowerCase();
-      if (nameLower === 'geom' || nameLower === 'geometry' ||
-          colType.includes('GEOMETRY') || colType === 'BLOB' ||
-          colType === 'WKB_GEOMETRY') {
+      const isGeomName = nameLower === 'geom' || nameLower === 'geometry' ||
+                         nameLower === 'wkb_geometry' || nameLower === 'shape' ||
+                         nameLower === 'the_geom';
+
+      if (colType.includes('GEOMETRY') || colType === 'WKB_GEOMETRY') {
+        geomColumn = colName;
+        geomColumnType = colType;
+      } else if (colType === 'BLOB' && isGeomName) {
         geomColumn = colName;
         geomColumnType = colType;
       }
@@ -385,13 +420,13 @@ export const extractGeoParquetAsGeoJSON = async (
   const allCols = descResult.toArray().map((r: any) => r.column_name as string);
   const propCols = allCols.filter((c: string) => c !== geomColumn);
 
-  const selectCols = propCols.map((c: string) => `"${c}"`).join(', ');
+  const selectCols = propCols.map((c: string) => escapeIdentifier(c)).join(', ');
   // If the column is already GEOMETRY, ST_AsGeoJSON works directly.
   // Only use ST_GeomFromWKB for raw BLOB/WKB_GEOMETRY columns.
   const needsWKBConversion = geomColumnType && (geomColumnType === 'BLOB' || geomColumnType === 'WKB_GEOMETRY');
   const geomExpr = needsWKBConversion
-    ? `ST_AsGeoJSON(ST_GeomFromWKB("${geomColumn}"))`
-    : `ST_AsGeoJSON("${geomColumn}")`;
+    ? `ST_AsGeoJSON(ST_GeomFromWKB(${escapeIdentifier(geomColumn)}))`
+    : `ST_AsGeoJSON(${escapeIdentifier(geomColumn)})`;
   const sql = `SELECT ${selectCols ? selectCols + ', ' : ''}${geomExpr} as __geojson FROM "${tableName}"`;
 
   const result = await conn.query(sql);
@@ -445,7 +480,7 @@ export const registerPlainCSVTable = async (file: File): Promise<{
     colTypes[col] = inferColumnType(rows.slice(0, sampleSize).map(r => r[col]));
   }
 
-  const colDefs = columns.map(col => `"${col}" ${colTypes[col]}`).join(', ');
+  const colDefs = columns.map(col => `${escapeIdentifier(col)} ${colTypes[col]}`).join(', ');
   await conn.query(`DROP TABLE IF EXISTS "${tableName}"`);
   await conn.query(`CREATE TABLE "${tableName}" (${colDefs})`);
 

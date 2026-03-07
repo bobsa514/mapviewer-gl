@@ -17,6 +17,7 @@ export const BasemapSelector: React.FC<BasemapSelectorProps> = ({ mapStyle, onSe
       <button
         onClick={() => setShowSelector(!showSelector)}
         className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm text-gray-700 hover:bg-gray-50 flex items-center space-x-2"
+        aria-label="Change basemap"
       >
         <span>Base Map</span>
         <svg

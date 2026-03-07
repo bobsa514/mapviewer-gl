@@ -39,6 +39,8 @@ interface LayersPanelProps {
   onClearSizeMapping: (layerId: number) => void;
   onOpenFilter: (layerId: number) => void;
   onRename: (layerId: number, newName: string) => void;
+  onReorder: (fromIndex: number, toIndex: number) => void;
+  activeFilterCounts: Record<number, number>;
 }
 
 export const LayersPanel: React.FC<LayersPanelProps> = ({
@@ -55,9 +57,13 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   onClearSizeMapping,
   onOpenFilter,
   onRename,
+  onReorder,
+  activeFilterCounts,
 }) => {
   const [editingLayerId, setEditingLayerId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState('');
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -117,15 +123,48 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
 
   return (
     <div className="space-y-4">
-      {layers.map(layer => (
-        <div key={layer.id} className="bg-white rounded-md border border-gray-200 overflow-hidden">
+      {layers.map((layer, index) => (
+        <div
+          key={layer.id}
+          className={`bg-white rounded-md border border-gray-200 overflow-hidden ${dragOverIndex === index ? 'border-t-2 border-blue-500' : ''} ${dragIndex === index ? 'opacity-50' : ''}`}
+          draggable
+          onDragStart={(e) => {
+            setDragIndex(index);
+            e.dataTransfer.effectAllowed = 'move';
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            setDragOverIndex(index);
+          }}
+          onDragLeave={() => setDragOverIndex(null)}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (dragIndex !== null && dragIndex !== index) {
+              onReorder(dragIndex, index);
+            }
+            setDragIndex(null);
+            setDragOverIndex(null);
+          }}
+          onDragEnd={() => {
+            setDragIndex(null);
+            setDragOverIndex(null);
+          }}
+        >
           <div className="flex items-center justify-between p-2">
             <div className="flex items-center space-x-2">
+              {/* Drag handle */}
+              <svg className="h-4 w-4 text-gray-300 cursor-grab active:cursor-grabbing flex-shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                <circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/>
+                <circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/>
+                <circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/>
+              </svg>
               <input
                 type="checkbox"
                 checked={layer.visible}
                 onChange={() => onToggle(layer.id)}
                 className="h-4 w-4 text-blue-600 rounded border-gray-300"
+                aria-label="Toggle layer visibility"
               />
               {editingLayerId === layer.id ? (
                 <input
@@ -151,13 +190,23 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
               )}
             </div>
             <div className="flex items-center space-x-2">
-              <button onClick={() => onToggleExpanded(layer.id)} className="text-gray-500 hover:text-gray-700" title="Symbology">
+              <button onClick={() => onToggleExpanded(layer.id)} className="text-gray-500 hover:text-gray-700" title="Symbology" aria-label="Layer settings">
                 <PaintBrushIcon className="h-5 w-5" />
               </button>
-              <button onClick={() => onOpenFilter(layer.id)} className="text-gray-500 hover:text-gray-700" title="Filter">
-                <FunnelIcon className="h-5 w-5" />
+              <button
+                onClick={() => onOpenFilter(layer.id)}
+                className="relative p-1 text-gray-400 hover:text-gray-600"
+                title="Filter data"
+                aria-label="Filter data"
+              >
+                <FunnelIcon className="h-4 w-4" />
+                {activeFilterCounts[layer.id] > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-[9px] font-bold rounded-full h-3.5 w-3.5 flex items-center justify-center leading-none">
+                    {activeFilterCounts[layer.id]}
+                  </span>
+                )}
               </button>
-              <button onClick={() => onRemove(layer.id)} className="text-red-600 hover:text-red-800" title="Remove Layer">
+              <button onClick={() => onRemove(layer.id)} className="text-red-600 hover:text-red-800" title="Remove Layer" aria-label="Remove layer">
                 <XMarkIcon className="h-5 w-5" />
               </button>
             </div>

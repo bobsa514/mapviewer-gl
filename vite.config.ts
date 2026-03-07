@@ -6,12 +6,31 @@ export default defineConfig({
   plugins: [react()],
   base: '/mapviewer-gl/',
   build: {
-    sourcemap: true,
-    chunkSizeWarningLimit: 1000,
+    sourcemap: 'hidden',
+    chunkSizeWarningLimit: 800,
     rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom'],
+          'vendor-deckgl': [
+            '@deck.gl/core',
+            '@deck.gl/layers',
+            '@deck.gl/react',
+            '@deck.gl/geo-layers',
+            '@deck.gl/extensions',
+            '@deck.gl/mesh-layers',
+            '@deck.gl/widgets',
+            'deck.gl',
+          ],
+          'vendor-h3': ['h3-js'],
+        },
+      },
       onwarn(warning, warn) {
-        // Suppress unresolved import warnings for optional deck.gl sub-packages
-        if (warning.code === 'UNRESOLVED_IMPORT' && warning.exporter?.includes('@deck.gl/')) return;
+        // Suppress unresolved import warnings for optional deck.gl / loaders.gl sub-packages
+        if (
+          warning.code === 'UNRESOLVED_IMPORT' &&
+          (warning.exporter?.includes('@deck.gl/') || warning.exporter?.includes('@loaders.gl/'))
+        ) return;
         warn(warning);
       }
     }
@@ -21,7 +40,7 @@ export default defineConfig({
   },
   server: {
     fs: {
-      strict: false
+      strict: true
     },
     hmr: {
       overlay: false

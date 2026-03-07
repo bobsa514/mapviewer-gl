@@ -2,6 +2,52 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-03-06
+
+### Added
+- **Toast notifications** — replaced all browser `alert()` calls with styled, auto-dismissing toast notifications
+- **Welcome screen** — empty state with instructions when no data is loaded
+- **Delete layer confirmation** — removing a layer now requires confirmation
+- **Config import confirmation** — importing a config when layers exist shows a warning dialog
+- **Loading progress bar** — file processing shows a visual progress bar instead of plain text
+- **Filter badges** — active filter count shown on layer cards in the Layers panel
+- **Layer drag-and-drop reorder** — drag layers to change rendering order
+- **SQL results export** — "Export CSV" button to download query results
+- **Config export button** — export configuration is now accessible from the main UI (not just inside Add Data modal)
+- **Accessibility** — `aria-label` on all icon buttons, `role="dialog"` on modals
+- **Responsive modals** — all modals now adapt to smaller screens
+
+### Fixed
+- **SQL injection** — column names in DuckDB queries now properly escape double quotes via `escapeIdentifier`
+- **DuckDB sync race condition** — `registeredTables` tracking moved from `useState` to `useRef` to prevent stale closures
+- **FilterModal crash on large datasets** — `Math.min/max(...spread)` replaced with iterative loop (fixes RangeError on 100K+ rows)
+- **GeoJSON null properties** — `inferColumnTypes` now scans first 100 features instead of only the first one
+- **GeoParquet empty result** — shows warning and registers as SQL-only table instead of adding an empty layer
+- **Table name collision** — uploading files that produce the same sanitized name now auto-appends a counter
+- **BLOB column detection** — non-geometry BLOB columns no longer trigger geometry extraction
+- **Null values in classification** — null/empty values filtered before computing quantile breaks (instead of defaulting to 0)
+- **Hover performance** — `setSelectedFeature` now skips updates when hovering over the same feature
+- **ESLint config** — upgraded to ESLint 9 with flat config; fixed lint command for Yarn compatibility
+- **Unused code** — removed dead `getGeometryKey` function and unused `Geometry` import
+
+### Changed
+- **Bundle splitting** — main app chunk reduced from 1,194 KB to 118 KB via manual vendor chunks (deck.gl, React, H3)
+- **deck.gl** upgraded from mixed 9.1.x/9.2.x to unified **9.2.11**
+- **luma.gl** upgraded from 9.0.x to **9.2.6**
+- **loaders.gl** upgraded to **4.3.4**
+- **ESLint** upgraded from 8.x to **9.x**
+- **CI pipeline** — Node 18→20, added yarn cache, added lint step
+- **Source maps** hidden in production builds (`sourcemap: 'hidden'`)
+- **Vite dev server** `fs.strict` set to `true` for security
+- **`predeploy` script** changed from `npm run build` to `yarn build`
+- Added `.prettierrc` and `.editorconfig` for code formatting consistency
+
+### Known Issues
+- H3 column detection only validates the first preview row
+- SQL queries with geometry columns execute 2-4 times
+- No automated test suite
+- maplibre-gl and vendor-deckgl chunks exceed 800 KB (expected for these libraries)
+
 ## [2.0.0] - 2026-03-04
 
 ### Added

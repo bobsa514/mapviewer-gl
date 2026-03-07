@@ -65,14 +65,14 @@ export const getNumericValuesForColumn = (
   column: string,
   activeFilters: { [layerId: number]: { fn: (item: any) => boolean; info: FilterInfo }[] }
 ): number[] => {
-  const getValue = (properties: { [key: string]: any } | null | undefined): number => {
+  const getValue = (properties: { [key: string]: any } | null | undefined): number | null => {
     const value = properties?.[column];
-    if (value === null || value === undefined || value === '') return 0;
+    if (value === null || value === undefined || value === '') return null;
     if (typeof value === 'string') {
       const parsed = parseFloat(value);
-      return isNaN(parsed) ? 0 : parsed;
+      return isNaN(parsed) ? null : parsed;
     }
-    return typeof value === 'number' ? value : 0;
+    return typeof value === 'number' && !isNaN(value) ? value : null;
   };
 
   let filteredData;
@@ -80,17 +80,17 @@ export const getNumericValuesForColumn = (
     filteredData = activeFilters[layer.id]?.length > 0
       ? layer.data.features.filter((item: Feature) => activeFilters[layer.id].every(filter => filter.fn(item)))
       : layer.data.features;
-    return filteredData.map((f: Feature) => getValue(f.properties));
+    return filteredData.map((f: Feature) => getValue(f.properties)).filter((v): v is number => v !== null);
   } else if (layer.type === 'point') {
     filteredData = activeFilters[layer.id]?.length > 0
       ? layer.data.filter((item: { properties: { [key: string]: any } }) => activeFilters[layer.id].every(filter => filter.fn(item)))
       : layer.data;
-    return filteredData.map((d: { properties: { [key: string]: any } }) => getValue(d.properties));
+    return filteredData.map((d: { properties: { [key: string]: any } }) => getValue(d.properties)).filter((v): v is number => v !== null);
   } else if (layer.type === 'h3') {
     filteredData = activeFilters[layer.id]?.length > 0
       ? layer.data.filter((item: { properties: { [key: string]: any } }) => activeFilters[layer.id].every(filter => filter.fn({ properties: item.properties })))
       : layer.data;
-    return filteredData.map((d: { properties: { [key: string]: any } }) => getValue(d.properties));
+    return filteredData.map((d: { properties: { [key: string]: any } }) => getValue(d.properties)).filter((v): v is number => v !== null);
   }
   return [];
 };

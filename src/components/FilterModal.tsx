@@ -95,10 +95,14 @@ export const FilterModal: React.FC<FilterModalProps> = ({
           const itemProps = item.properties || item;
           return itemProps[selectedColumn];
         });
-        setNumericRange({
-          min: Math.min(...values),
-          max: Math.max(...values)
-        });
+        // Iterative min/max to avoid RangeError on large datasets (100K+ rows)
+        let min = Infinity;
+        let max = -Infinity;
+        for (const v of values) {
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+        setNumericRange({ min, max });
       } else if (column?.type === 'text' && column.uniqueValues) {
         setSuggestions(column.uniqueValues);
       }
@@ -276,6 +280,7 @@ export const FilterModal: React.FC<FilterModalProps> = ({
                       <button
                         onClick={() => handleRemoveValue(value)}
                         className="ml-1.5 text-blue-500 hover:text-blue-700"
+                        aria-label={`Remove ${value}`}
                       >
                         <XMarkIcon className="h-4 w-4" />
                       </button>
@@ -317,13 +322,14 @@ export const FilterModal: React.FC<FilterModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl p-6 w-[480px] max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+      <div className="bg-white rounded-xl p-6 w-full max-w-[480px] mx-4 max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-semibold text-gray-900">Filter Data</h2>
-          <button 
-            onClick={onClose} 
+          <button
+            onClick={onClose}
             className="text-gray-400 hover:text-gray-500 transition-colors"
+            aria-label="Close filter"
           >
             <XMarkIcon className="w-6 h-6" />
           </button>
@@ -339,6 +345,7 @@ export const FilterModal: React.FC<FilterModalProps> = ({
                   <button
                     onClick={() => onRemoveFilter(index)}
                     className="text-gray-400 hover:text-gray-500"
+                    aria-label="Remove filter"
                   >
                     <XMarkIcon className="h-4 w-4" />
                   </button>

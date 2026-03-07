@@ -1,111 +1,101 @@
 # MapViewer-GL
 
-A browser-based geospatial data viewer with SQL-powered analytics. Upload your data, style it on an interactive map, and run spatial queries — all locally in the browser with zero server-side processing.
+**Browser-based geospatial data viewer with SQL-powered analytics.**
 
-[Live Demo](https://bobsa514.github.io/mapviewer-gl/)
+Upload your data, style it on an interactive map, and run spatial queries — all locally in the browser with zero server-side processing.
 
-## Key Features
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-blue?style=for-the-badge)](https://bobsa514.github.io/mapviewer-gl/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+[![Built with](https://img.shields.io/badge/Built%20with-React%20%2B%20deck.gl-61DAFB?style=for-the-badge)](https://deck.gl/)
 
-### Data Formats
-- **GeoJSON** — polygons, lines, points, and multi-geometries
-- **CSV** — auto-detects lat/lng columns or H3 hex indexes; CSVs without coordinates are registered as SQL-only tables for JOINs
-- **Shapefile** — upload a zipped `.shp`/`.dbf`/`.prj` bundle; parsed client-side via [shpjs](https://github.com/calvinmetcalf/shapefile-js)
-- **Parquet / GeoParquet** — GeoParquet files render on the map; plain Parquet files are registered as SQL-only tables for JOINs
-- **Map Configurations** — export/import full map state (layers, styles, filters, view)
+![MapViewer-GL Hero](docs/hero.png)
+
+## Why MapViewer-GL?
+
+| | |
+|---|---|
+| **100% Client-Side** | Your data never leaves your browser. No server, no uploads, no tracking. |
+| **SQL-Powered** | Every layer becomes a DuckDB table. Run spatial joins, aggregations, and filters with real SQL. |
+| **Multi-Format** | GeoJSON, CSV, Shapefile, Parquet/GeoParquet — drag, drop, and go. |
+| **Zero Config** | No API keys, no accounts, no setup. Just open and use. |
+
+## Features at a Glance
+
+### Multi-Format Data Loading
+
+Drop files in any major geospatial format. CSVs without coordinates? They become SQL-only tables for JOINs.
+
+![Multi-format data loading](docs/multi-format.png)
+
+**Supported formats:**
+- **GeoJSON** — polygons, lines, points, multi-geometries
+- **CSV** — auto-detects lat/lng columns or H3 hex indexes
+- **Shapefile** — zipped `.shp`/`.dbf`/`.prj` bundles
+- **Parquet / GeoParquet** — geometry auto-detected from WKB/BLOB columns
+- **Map Configurations** — export/import full map state as JSON
 
 ### In-Browser SQL with DuckDB-WASM
-Every data layer you add becomes a queryable SQL table powered by [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview). This means you can:
 
-- **Query any layer** — `SELECT * FROM my_layer WHERE population > 10000`
-- **Join layers** — `SELECT a.*, b.name FROM points a JOIN polygons b ON ...`
-- **Spatial operations** — `ST_Within`, `ST_Intersects`, `ST_Buffer`, `ST_Distance`, and more via the [DuckDB Spatial extension](https://duckdb.org/docs/extensions/spatial/overview)
-- **Add results as layers** — query results with geometry columns can be visualized directly on the map
-- **Non-geo tables** — plain CSV and Parquet files without geometry are available as SQL tables for JOINs and analysis
+Every data layer becomes a queryable SQL table powered by [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview). Run spatial joins across layers, filter with SQL, and add query results back to the map.
 
-DuckDB is lazy-loaded (~200 KB WASM) only when you open the SQL editor, so it doesn't affect initial page load.
+![SQL Editor with spatial query](docs/sql-editor.png)
 
-### Map & Styling
+```sql
+-- Spatial join: find trees within census tracts
+SELECT t.*, c.population
+FROM sf_trees t
+JOIN census_tracts c ON ST_Within(t.geom, c.geom)
+WHERE t.dbh > 30
+
+-- Export results as CSV or add directly as a new map layer
+```
+
+DuckDB is lazy-loaded (~200 KB) only when you open the SQL editor — zero impact on initial page load.
+
+### Map Styling & Layer Management
+
 - Multiple free basemaps (Carto Light, Carto Dark, OpenStreetMap) — no API key needed
-- Per-layer color and size symbology with classified breaks (equal-interval)
+- Per-layer color and size symbology with classified breaks
 - 8 sequential color scales (Reds, Blues, YlOrRd, etc.)
 - Opacity, point size, and visibility controls
+- Drag-and-drop layer reordering
 - Interactive feature inspection on click
+- Column-level data filtering with numeric and text modes
 - Color and size legends
-
-### Layer Management
-- Drag-and-drop file upload via centered modal
-- Toggle visibility, remove, and rename layers
-- Column-level filtering with multiple conditions
-- Export/import full map configurations as JSON
 
 ## Data Privacy
 
 All processing happens locally in your browser. No data is uploaded to any server. When you close the tab, all data is gone.
 
-## Data Format Details
-
-### GeoJSON
-Standard GeoJSON FeatureCollection. All geometry types supported. Properties are available for filtering, symbology, and SQL queries.
-
-### CSV (Points)
-Include coordinate columns with common names:
-- Latitude: `lat`, `latitude`, `y`
-- Longitude: `lng`, `long`, `longitude`, `lon`, `x`
-
-### CSV (H3 Hexagons)
-Include an H3 index column named: `hex_id`, `h3_index`, `h3`, or `hexagon`. Must contain valid H3 cell addresses.
-
-### Shapefile
-Upload a `.zip` containing `.shp`, `.dbf`, and optionally `.prj` files. Multi-layer ZIPs are merged into a single collection.
-
-### Parquet / GeoParquet
-Upload `.parquet` files. GeoParquet files with a geometry column are rendered on the map. Plain Parquet files without geometry are registered as SQL-only tables, available for JOINs and queries in the SQL editor.
-
-## Setup
+## Quick Start
 
 ```bash
 git clone https://github.com/bobsa514/mapviewer-gl.git
 cd mapviewer-gl
-```
-
-Install dependencies (uses Yarn 4 via Corepack):
-
-```bash
-corepack enable
+corepack enable        # Enables Yarn 4
 yarn install
+yarn dev               # http://localhost:5173
 ```
 
-Start the development server:
+Or just use the [live demo](https://bobsa514.github.io/mapviewer-gl/) — no install needed.
 
-```bash
-yarn dev
-```
-
-Build for production:
-
-```bash
-yarn build
-```
-
-## Architecture
-
-The app is a React + TypeScript SPA built with Vite. Key libraries:
+## Tech Stack
 
 | Library | Purpose |
 |---|---|
 | [deck.gl](https://deck.gl/) | WebGL-accelerated map layers (GeoJSON, Scatterplot, H3) |
 | [MapLibre GL JS](https://maplibre.org/) | Basemap rendering (via react-map-gl) |
 | [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview) | In-browser SQL engine with spatial extension |
-| [shpjs](https://github.com/calvinmetcalf/shapefile-js) | Shapefile parsing (ZIP to GeoJSON) |
-| [PapaParse](https://www.papaparse.com/) | CSV parsing |
-| [h3-js](https://h3geo.org/) | H3 hexagon utilities |
+| [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) | UI framework |
+| [Vite](https://vite.dev/) | Build tooling |
 | [Tailwind CSS](https://tailwindcss.com/) | Styling |
 
-### Project Structure
+<details>
+<summary><strong>Project Structure</strong></summary>
 
 ```
 src/
-  types.ts                  # Shared type definitions (LayerInfo, ColorScaleName, etc.)
+  types.ts                  # Shared type definitions
   utils/
     geometry.ts             # Coordinate extraction, bounds, color/size mapping
     csv.ts                  # CSV column detection and row processing
@@ -114,9 +104,10 @@ src/
     duckdb.ts               # DuckDB-WASM init, table registration, query execution (code-split)
   components/
     MapViewerGL.tsx          # Main orchestrator — state management, deck.gl rendering
-    AddDataModal.tsx         # Tabbed file upload modal (GeoJSON, CSV, Shapefile, Parquet, Config)
+    Toast.tsx                # Toast notification system
+    AddDataModal.tsx         # Tabbed file upload modal
     SQLEditor.tsx            # Split-pane SQL editor with results table
-    LayersPanel.tsx          # Layer list with symbology controls
+    LayersPanel.tsx          # Layer list with symbology controls and drag reorder
     FilterModal.tsx          # Column-level data filtering
     CSVPreviewModal.tsx      # CSV column selection before import
     GeoJSONPreviewModal.tsx  # GeoJSON property selection before import
@@ -124,6 +115,8 @@ src/
     BasemapSelector.tsx      # Basemap style picker
     LegendDisplay.tsx        # Color and size legends
 ```
+
+</details>
 
 ## Deployment
 

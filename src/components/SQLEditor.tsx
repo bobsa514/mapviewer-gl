@@ -138,7 +138,7 @@ export const SQLEditor: React.FC<SQLEditorProps> = ({ registeredTables, duckdbOn
               {result.rowCount} rows in {result.executionTimeMs.toFixed(0)}ms
             </span>
           )}
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors" aria-label="Close SQL editor">
             <XMarkIcon className="h-4 w-4" />
           </button>
         </div>
@@ -185,10 +185,42 @@ export const SQLEditor: React.FC<SQLEditorProps> = ({ registeredTables, duckdbOn
                       Add as Layer
                     </button>
                   )}
+                  {result && (
+                    <button
+                      onClick={() => {
+                        if (!result) return;
+                        const csvRows = [
+                          result.columns.join(','),
+                          ...result.rows.map(row =>
+                            row.map(cell => {
+                              if (cell === null || cell === undefined) return '';
+                              const str = String(cell);
+                              return str.includes(',') || str.includes('"') || str.includes('\n')
+                                ? `"${str.replace(/"/g, '""')}"` : str;
+                            }).join(',')
+                          )
+                        ];
+                        const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'query_results.csv';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                      }}
+                      className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded hover:bg-gray-200 transition-colors"
+                      aria-label="Export results as CSV"
+                    >
+                      Export CSV
+                    </button>
+                  )}
                   <button
                     onClick={() => setShowHelp(!showHelp)}
                     className={`px-2 py-1 text-xs rounded transition-colors ${showHelp ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}
                     title="Help & examples"
+                    aria-label="Help and examples"
                   >
                     ?
                   </button>
@@ -301,12 +333,12 @@ export const SQLEditor: React.FC<SQLEditorProps> = ({ registeredTables, duckdbOn
                   )}
                   <ExampleQuery
                     label="Spatial join (points in polygons)"
-                    sql={`SELECT a.*, b.*\nFROM points a, polygons b\nWHERE ST_Within(a.geom, b.geom)`}
+                    sql={`SELECT a.*, b.*\nFROM ${registeredTables[0] || 'table_name'} a, ${registeredTables[1] || 'table_name_2'} b\nWHERE ST_Within(a.geom, b.geom)`}
                     onInsert={insertExample}
                   />
                   <ExampleQuery
                     label="Buffer & intersect"
-                    sql={`SELECT a.*, b.*\nFROM layer_a a, layer_b b\nWHERE ST_Intersects(\n  ST_Buffer(a.geom, 0.01),\n  b.geom\n)`}
+                    sql={`SELECT a.*, b.*\nFROM ${registeredTables[0] || 'table_name'} a, ${registeredTables[1] || 'table_name_2'} b\nWHERE ST_Intersects(\n  ST_Buffer(a.geom, 0.01),\n  b.geom\n)`}
                     onInsert={insertExample}
                   />
                 </div>

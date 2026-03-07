@@ -81,11 +81,11 @@ export const AddDataModal: React.FC<AddDataModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl shadow-2xl w-[560px] max-h-[80vh] overflow-hidden">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-[560px] mx-4 max-h-[80vh] overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold text-gray-900">Add Data</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors" aria-label="Close">
             <XMarkIcon className="h-5 w-5" />
           </button>
         </div>

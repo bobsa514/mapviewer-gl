@@ -24,13 +24,13 @@ export const CSVPreviewModal: React.FC<CSVPreviewModalProps> = ({
   const isDuckDBOnly = csvPreview.mode === 'duckdb_only';
 
   return (
-    <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 max-w-[90vw] w-[1000px] max-h-[90vh] overflow-hidden flex flex-col">
+    <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+      <div className="bg-white rounded-lg p-6 w-full max-w-[1000px] mx-4 max-h-[90vh] overflow-hidden flex flex-col">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold text-gray-900">
             {isDuckDBOnly ? 'Register as SQL Table' : 'Preview CSV Data'}
           </h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-700" aria-label="Close">
             <XMarkIcon className="h-6 w-6" />
           </button>
         </div>
