@@ -40,7 +40,7 @@ export const sanitizeTableName = (name: string, deduplicate = true): string => {
 };
 
 /** Escape a column name for safe use in SQL identifiers (double-quote escaping). */
-const escapeIdentifier = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+export const escapeIdentifier = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 
 
 /**
@@ -86,7 +86,7 @@ export const initDuckDB = async (): Promise<void> => {
 
 
 /** Infer a DuckDB column type (BIGINT, DOUBLE, or VARCHAR) from sample values. */
-const inferColumnType = (values: any[]): string => {
+export const inferColumnType = (values: any[]): string => {
   const nonNull = values.filter(v => v !== null && v !== undefined && v !== '');
   if (nonNull.length === 0) return 'VARCHAR';
 
@@ -110,7 +110,7 @@ const inferColumnType = (values: any[]): string => {
 };
 
 /** Sample up to 100 items and infer the SQL type for each property column. */
-const inferColumnTypes = (items: any[], getProps: (item: any) => Record<string, any>): Record<string, string> => {
+export const inferColumnTypes = (items: any[], getProps: (item: any) => Record<string, any>): Record<string, string> => {
   const sampleSize = Math.min(items.length, 100);
   const sample = items.slice(0, sampleSize);
 
@@ -134,7 +134,7 @@ const inferColumnTypes = (items: any[], getProps: (item: any) => Record<string, 
   return types;
 };
 
-const formatValue = (val: any, type: string): string => {
+export const formatValue = (val: any, type: string): string => {
   if (val === null || val === undefined) return 'NULL';
   if (type === 'BIGINT' || type === 'DOUBLE') {
     const n = Number(val);
@@ -234,111 +234,120 @@ export interface QueryResult {
 
 /**
  * Execute a user SQL query and return structured results.
- * Automatically detects geometry columns and wraps them with ST_AsText()
- * so the results can be converted back to GeoJSON for the "Add as Layer" feature.
+ * Automatically detects geometry columns via DESCRIBE (without materializing data),
+ * then runs a single combined query that includes both ST_AsText (for display)
+ * and ST_AsGeoJSON (for layer extraction) — max 2 query executions total.
  */
 export const executeQuery = async (sql: string): Promise<QueryResult> => {
   if (!conn) throw new Error('DuckDB not initialized');
 
   const start = performance.now();
 
-  // First run the query to inspect schema
-  const initialResult = await conn.query(sql);
-  const initialColumns: string[] = initialResult.schema.fields.map((f: any) => f.name);
-
-  // Detect geometry columns by checking actual DuckDB column types via DESCRIBE.
-  // Avoids false positives on STRUCT/BLOB columns like "bbox".
+  // Step 1: Detect geometry columns via DESCRIBE (no data materialized)
+  let columns: string[] = [];
   const geomColNames: string[] = [];
+  let describeSucceeded = false;
+
   try {
     const descResult = await conn.query(`DESCRIBE (${sql})`);
     const descRows = descResult.toArray();
     for (const row of descRows) {
       const colName = row.column_name as string;
       const colType = String(row.column_type || '').toUpperCase();
+      columns.push(colName);
       if (colType === 'GEOMETRY' || colType === 'WKB_GEOMETRY') {
         geomColNames.push(colName);
       }
     }
+    describeSucceeded = true;
   } catch {
-    // DESCRIBE may fail for some queries; fall back to name-based detection
-    for (let i = 0; i < initialColumns.length; i++) {
-      const colName = initialColumns[i].toLowerCase();
+    // DESCRIBE failed — will fall back to running the query directly
+  }
+
+  // Step 2: Execute the query (single execution regardless of geometry)
+  let result: any;
+
+  if (describeSucceeded && geomColNames.length > 0) {
+    // Geometry detected: run a single combined query with both ST_AsText (display)
+    // and ST_AsGeoJSON (for layer extraction) columns
+    const selectParts = columns.map(col => {
+      if (geomColNames.includes(col)) {
+        return `ST_AsText(${escapeIdentifier(col)}) as ${escapeIdentifier(col)}, ST_AsGeoJSON(${escapeIdentifier(col)}) as ${escapeIdentifier(col + '__geojson')}`;
+      }
+      return escapeIdentifier(col);
+    });
+    const combinedSql = `SELECT ${selectParts.join(', ')} FROM (${sql}) AS __user_query`;
+
+    try {
+      result = await conn.query(combinedSql);
+    } catch {
+      // If combined query fails, try plain query
+      result = await conn.query(sql);
+      columns = result.schema.fields.map((f: any) => f.name);
+      geomColNames.length = 0; // Clear geometry detection
+    }
+  } else if (describeSucceeded) {
+    // No geometry columns — run plain query
+    result = await conn.query(sql);
+  } else {
+    // DESCRIBE failed — run plain query and detect geometry from schema
+    result = await conn.query(sql);
+    columns = result.schema.fields.map((f: any) => f.name);
+
+    // Fallback geometry detection by column name
+    for (let i = 0; i < columns.length; i++) {
+      const colName = columns[i].toLowerCase();
       if (colName === 'geom' || colName === 'geometry') {
-        const field = initialResult.schema.fields[i];
+        const field = result.schema.fields[i];
         const typeStr = String(field.type || '').toUpperCase();
-        // Only match if it looks like a geometry type, not a STRUCT
         if (!typeStr.includes('STRUCT')) {
-          geomColNames.push(initialColumns[i]);
+          geomColNames.push(columns[i]);
         }
       }
     }
   }
 
-  // If geometry columns found, re-run with ST_AsGeoJSON for geometry extraction
-  // and ST_AsText for display. Use ST_AsGeoJSON to build FeatureCollection (avoids WKT parsing bugs).
-  let result: any;
-  let columns: string[];
-  let geojsonResult: any = null;
-  if (geomColNames.length > 0) {
-    // Query for table display: convert geom to WKT text
-    const displaySql = `SELECT ${initialColumns.map(col =>
-      geomColNames.includes(col) ? `ST_AsText(${escapeIdentifier(col)}) as ${escapeIdentifier(col)}` : escapeIdentifier(col)
-    ).join(', ')} FROM (${sql}) AS __user_query`;
-    // Query for GeoJSON extraction: convert geom to GeoJSON strings
-    const geojsonSql = `SELECT ${initialColumns.map(col =>
-      geomColNames.includes(col) ? `ST_AsGeoJSON(${escapeIdentifier(col)}) as ${escapeIdentifier(col)}` : escapeIdentifier(col)
-    ).join(', ')} FROM (${sql}) AS __user_query`;
-    try {
-      result = await conn.query(displaySql);
-      columns = result.schema.fields.map((f: any) => f.name);
-    } catch {
-      result = initialResult;
-      columns = initialColumns;
-    }
-    try {
-      geojsonResult = await conn.query(geojsonSql);
-    } catch {
-      // GeoJSON extraction failed, will not offer "Add as Layer"
-    }
-  } else {
-    result = initialResult;
-    columns = initialColumns;
-  }
-
   const executionTimeMs = performance.now() - start;
-  const rows: any[][] = [];
+
+  // Step 3: Process results
   const batchData = result.toArray();
+  const resultColumns: string[] = result.schema.fields.map((f: any) => f.name);
+
+  // Filter out the __geojson helper columns from the display columns
+  const displayColumns = resultColumns.filter((c: string) => !c.endsWith('__geojson'));
+
+  const rows: any[][] = [];
+  const features: Feature[] = [];
 
   for (const row of batchData) {
+    // Build display row (without __geojson columns)
     const rowData: any[] = [];
-    for (let i = 0; i < columns.length; i++) {
-      let val = row[columns[i]];
+    for (const col of displayColumns) {
+      let val = row[col];
       if (typeof val === 'bigint') val = Number(val);
       rowData.push(val);
     }
     rows.push(rowData);
-  }
 
-  // Build FeatureCollection from GeoJSON result (not WKT — avoids parser bugs)
-  const features: Feature[] = [];
-  if (geojsonResult && geomColNames.length > 0) {
-    const geomCol = geomColNames[0];
-    const propCols = columns.filter(c => !geomColNames.includes(c));
-    const gjRows = geojsonResult.toArray();
-    for (const row of gjRows) {
-      const geojsonStr = row[geomCol];
-      if (!geojsonStr || typeof geojsonStr !== 'string') continue;
-      try {
-        const geometry = JSON.parse(geojsonStr) as Geometry;
-        const properties: Record<string, any> = {};
-        for (const col of propCols) {
-          let val = row[col];
-          if (typeof val === 'bigint') val = Number(val);
-          properties[col] = val;
+    // Build GeoJSON features from __geojson columns
+    if (geomColNames.length > 0) {
+      const geomCol = geomColNames[0];
+      const geojsonStr = row[geomCol + '__geojson'];
+      if (geojsonStr && typeof geojsonStr === 'string') {
+        try {
+          const geometry = JSON.parse(geojsonStr) as Geometry;
+          const properties: Record<string, any> = {};
+          for (const col of displayColumns) {
+            if (!geomColNames.includes(col)) {
+              let val = row[col];
+              if (typeof val === 'bigint') val = Number(val);
+              properties[col] = val;
+            }
+          }
+          features.push({ type: 'Feature', geometry, properties });
+        } catch {
+          // Skip unparseable geometry
         }
-        features.push({ type: 'Feature', geometry, properties });
-      } catch {
-        // Skip unparseable geometry
       }
     }
   }
@@ -348,7 +357,7 @@ export const executeQuery = async (sql: string): Promise<QueryResult> => {
     ? { type: 'FeatureCollection', features }
     : undefined;
 
-  return { columns, rows, hasGeometry, geojson, rowCount: rows.length, executionTimeMs };
+  return { columns: displayColumns, rows, hasGeometry, geojson, rowCount: rows.length, executionTimeMs };
 };
 
 export const isDuckDBReady = (): boolean => db !== null;

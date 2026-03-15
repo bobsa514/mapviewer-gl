@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.0] - 2026-03-14
+
+### Added
+- **Sample datasets on welcome screen** — "US Cities" and "US States" buttons let first-time visitors explore the app without uploading data; data is code-split (~2 KB chunk, lazy-loaded on click)
+- **Main canvas drag-and-drop** — drop files directly on the map to load them (not just inside the Add Data modal); visual drop indicator overlay with file format hints
+- **URL hash state sharing** — map position is encoded in the URL hash (`#lat=X&lng=Y&zoom=Z`) and restored on page load; debounced updates (300ms)
+- **React ErrorBoundary** — rendering crashes now show a recovery UI ("Something went wrong / Reload") instead of a blank white screen
+- **Vitest test suite** — 57 unit tests across 4 test files covering all pure utility functions (`csv.ts`, `geometry.ts`, `layers.ts`, `duckdb.ts`); CI runs tests before deploy
+
+### Fixed
+- **SQL query quadruple execution** — geometry queries now execute max 2 times (DESCRIBE + combined ST_AsText/ST_AsGeoJSON) instead of up to 4 separate queries; significant performance improvement for spatial joins
+- **ESLint warning budget** — all 9 intentional `react-hooks/exhaustive-deps` suppressions now use explicit `eslint-disable-next-line` comments; lint threshold reduced from 20 to 5
+
+### Changed
+- **package.json version** updated from 2.0.0 to 2.1.0 (was out of sync with CHANGELOG)
+- **ESLint config** now ignores `.claude/` and PnP files
+- **duckdb.ts** exports `escapeIdentifier`, `inferColumnType`, `inferColumnTypes`, `formatValue` for testability
+- **Vitest 3.x** added as dev dependency; test config added to `vite.config.ts`
+- **CI pipeline** now runs `yarn test` between lint and build steps
+
 ## [2.1.0] - 2026-03-06
 
 ### Added

@@ -12,6 +12,7 @@ corepack enable          # Required first time — enables Yarn 4
 yarn install             # Install dependencies
 yarn dev                 # Dev server → http://localhost:5173
 yarn build               # Production build (also runs TypeScript check)
+yarn test                # Run Vitest unit tests
 yarn lint                # ESLint
 yarn preview             # Preview production build locally
 ```
@@ -21,7 +22,7 @@ yarn preview             # Preview production build locally
 ## File Structure
 ```
 src/
-├── App.tsx                        # Minimal wrapper
+├── App.tsx                        # Minimal wrapper with ErrorBoundary
 ├── main.tsx                       # Entry point
 ├── types.ts                       # All shared TypeScript types (LayerInfo, CSVPreviewData, DuckDBOnlyTable, etc.)
 ├── components/
@@ -35,13 +36,17 @@ src/
 │   ├── FeaturePropertiesPanel.tsx # Click-to-inspect feature attributes
 │   ├── LegendDisplay.tsx          # Color and size legends
 │   ├── GeoJSONPreviewModal.tsx    # GeoJSON text preview
-│   └── Toast.tsx                  # Toast notification system (useToast hook + ToastContainer)
+│   ├── Toast.tsx                  # Toast notification system (useToast hook + ToastContainer)
+│   └── ErrorBoundary.tsx          # Catches rendering crashes, shows recovery UI
+├── data/
+│   └── samples.ts                 # Built-in sample GeoJSON datasets (US Cities, US States)
 ├── utils/
 │   ├── duckdb.ts                  # DuckDB-WASM init, table registration, Parquet/CSV/GeoJSON handling
 │   ├── csv.ts                     # CSV parsing, coordinate detection, H3 column detection
 │   ├── geometry.ts                # Coordinate extraction from GeoJSON features
 │   ├── layers.ts                  # deck.gl layer factory (GeoJsonLayer, ScatterplotLayer, H3HexagonLayer)
-│   └── shapefile.ts               # Shapefile (.zip) parsing via shpjs
+│   ├── shapefile.ts               # Shapefile (.zip) parsing via shpjs
+│   └── __tests__/                 # Vitest unit tests for all utility modules
 ```
 
 ## Architecture
@@ -67,6 +72,9 @@ File upload → parse (CSV/GeoJSON/Shapefile/Parquet)
 - **SQL escaping** — column names escaped via `escapeIdentifier()` in duckdb.ts
 - **GeoJSON round-trip** — geometry stored in DuckDB via `ST_GeomFromGeoJSON`, extracted via `ST_AsGeoJSON`
 - **deck.gl layers memoized** with `useMemo` — only recreate when data/filters change
+- **URL hash state** — map position persisted in URL hash for shareable links
+- **Main canvas drag-and-drop** — files can be dropped anywhere on the map, not just the Add Data modal
+- **ErrorBoundary** — wraps MapViewerGL to prevent white-screen crashes
 
 ### Supported Data Formats
 | Format | Map layer? | DuckDB table? | Handler |
@@ -79,12 +87,11 @@ File upload → parse (CSV/GeoJSON/Shapefile/Parquet)
 | GeoParquet | Yes | Yes | `handleParquetFile` → `extractGeoParquetAsGeoJSON` |
 | Plain Parquet | No | Yes (DuckDB-only) | `handleParquetFile` → no geom detected |
 
-## Known Issues (from CHANGELOG v2.1.0)
+## Known Issues (from CHANGELOG v2.2.0)
 - H3 column detection only validates the first preview row
-- SQL queries with geometry columns execute 2-4 times
-- No automated test suite
 - BigInt values silently converted to Number (precision loss > 2^53)
 - maplibre-gl and vendor-deckgl chunks exceed 800 KB (expected for these libraries)
+- `papaparse` static import in MapViewerGL.tsx prevents full code splitting of duckdb.ts
 
 ## Common Tasks
 

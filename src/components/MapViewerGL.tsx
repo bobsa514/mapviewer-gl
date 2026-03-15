@@ -26,11 +26,28 @@ import { AddDataModal } from './AddDataModal';
 import { SQLEditor } from './SQLEditor';
 import { useToast, ToastContainer } from './Toast';
 
-const INITIAL_VIEW_STATE: MapViewState = {
+const DEFAULT_VIEW_STATE: MapViewState = {
   latitude: 39.8283,
   longitude: -98.5795,
   zoom: 3,
 };
+
+const parseHashViewState = (): MapViewState => {
+  try {
+    const hash = window.location.hash.slice(1); // remove #
+    if (!hash) return DEFAULT_VIEW_STATE;
+    const params = new URLSearchParams(hash);
+    const lat = parseFloat(params.get('lat') || '');
+    const lng = parseFloat(params.get('lng') || '');
+    const zoom = parseFloat(params.get('zoom') || '');
+    if (isNaN(lat) || isNaN(lng) || isNaN(zoom)) return DEFAULT_VIEW_STATE;
+    return { latitude: lat, longitude: lng, zoom };
+  } catch {
+    return DEFAULT_VIEW_STATE;
+  }
+};
+
+const INITIAL_VIEW_STATE = parseHashViewState();
 
 const MapViewerGL: React.FC = () => {
   const layerIdCounter = useRef(0);
@@ -41,6 +58,21 @@ const MapViewerGL: React.FC = () => {
 
   const [layers, setLayers] = useState<LayerInfo[]>([]);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
+  const hashUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (hashUpdateTimer.current) clearTimeout(hashUpdateTimer.current);
+    hashUpdateTimer.current = setTimeout(() => {
+      const lat = viewState.latitude.toFixed(4);
+      const lng = viewState.longitude.toFixed(4);
+      const zoom = viewState.zoom.toFixed(2);
+      window.history.replaceState(null, '', `#lat=${lat}&lng=${lng}&zoom=${zoom}`);
+    }, 300);
+    return () => {
+      if (hashUpdateTimer.current) clearTimeout(hashUpdateTimer.current);
+    };
+  }, [viewState]);
+
   const [isLoading, setIsLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [selectedFeature, setSelectedFeature] = useState<Feature | null>(null);
@@ -58,6 +90,8 @@ const MapViewerGL: React.FC = () => {
   const pendingGeoJSONRef = useRef<FeatureCollection | null>(null);
   const pendingGeoJSONNameRef = useRef<string>('shapefile_layer');
   const [isFeatureLocked, setIsFeatureLocked] = useState(false);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const dragCounterRef = useRef(0);
 
   // Toast notifications
   const { toasts, addToast, removeToast } = useToast();
@@ -136,6 +170,7 @@ const MapViewerGL: React.FC = () => {
       }
     };
     syncTables();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layers, isDuckDBReady, duckdbOnlyTables]);
 
   // Update allAvailableColumns when a new feature is selected
@@ -147,6 +182,7 @@ const MapViewerGL: React.FC = () => {
         setSelectedColumns(columns.slice(0, 5));
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFeature]);
 
   const handleColumnToggle = (column: string) => {
@@ -210,6 +246,7 @@ const MapViewerGL: React.FC = () => {
       }
     };
     reader.readAsText(file);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleColumnSelection = (header: string) => {
@@ -370,6 +407,7 @@ const MapViewerGL: React.FC = () => {
       }
     };
     reader.readAsText(file);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---- Shapefile handling ----
@@ -408,6 +446,7 @@ const MapViewerGL: React.FC = () => {
       }
     };
     reader.readAsArrayBuffer(file);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---- Parquet handling ----
@@ -453,6 +492,7 @@ const MapViewerGL: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---- DuckDB-only table removal ----
@@ -465,6 +505,7 @@ const MapViewerGL: React.FC = () => {
     }
     setDuckdbOnlyTables(prev => prev.filter(t => t.tableName !== tableName));
     updateRegisteredTables(registeredTablesRef.current.filter(t => t !== tableName));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleGeoJSONPropertySelection = (property: string) => {
@@ -637,6 +678,7 @@ const MapViewerGL: React.FC = () => {
       console.error('Error importing configuration:', error);
       addToast('error', 'Error importing configuration file');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getNextLayerId, layers.length, applyConfig]);
 
   const exportConfiguration = () => {
@@ -789,7 +831,63 @@ const MapViewerGL: React.FC = () => {
   // ---- SQL Add Layer ----
   const handleSQLAddLayer = useCallback((name: string, geojson: FeatureCollection) => {
     addGeoJSONLayer(geojson, new Set(Object.keys(geojson.features[0]?.properties || {})), name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ---- Drag-and-drop on main canvas ----
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDraggingOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) {
+      setIsDraggingOver(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+    dragCounterRef.current = 0;
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+
+    for (const file of files) {
+      const ext = file.name.toLowerCase().split('.').pop();
+      switch (ext) {
+        case 'geojson':
+        case 'json':
+          handleGeoJSONFile(file);
+          break;
+        case 'csv':
+          handleCSVFile(file);
+          break;
+        case 'zip':
+          handleShapefileFile(file);
+          break;
+        case 'parquet':
+          handleParquetFile(file);
+          break;
+        default:
+          addToast('error', `Unsupported file format: .${ext}`);
+      }
+    }
+  }, [handleGeoJSONFile, handleCSVFile, handleShapefileFile, handleParquetFile, addToast]);
 
   // Use refs for hover feature to avoid re-rendering deck.gl layers on every mouse move
   const selectedFeatureRef = useRef<Feature | null>(null);
@@ -973,8 +1071,36 @@ const MapViewerGL: React.FC = () => {
     });
   }, [layers, activeFilters]);
 
+  // Load built-in sample datasets (US Cities points, US States polygons)
+  const loadSampleData = async (dataset: 'cities' | 'states' | 'both') => {
+    const { sampleCities, sampleStates } = await import('../data/samples');
+    if (dataset === 'cities' || dataset === 'both') {
+      addGeoJSONLayer(sampleCities, new Set(Object.keys(sampleCities.features[0]?.properties || {})), 'US Major Cities');
+    }
+    if (dataset === 'states' || dataset === 'both') {
+      addGeoJSONLayer(sampleStates, new Set(Object.keys(sampleStates.features[0]?.properties || {})), 'US States (sample)');
+    }
+  };
+
   return (
-    <div className="fixed inset-0">
+    <div
+      className="fixed inset-0"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* Drop indicator overlay */}
+      {isDraggingOver && (
+        <div className="absolute inset-0 z-[100] bg-blue-500/10 border-4 border-dashed border-blue-500 flex items-center justify-center pointer-events-none">
+          <div className="bg-white/90 rounded-2xl px-8 py-6 shadow-xl text-center">
+            <div className="text-4xl mb-2">📂</div>
+            <p className="text-lg font-medium text-blue-600">Drop files to add data</p>
+            <p className="text-sm text-gray-500 mt-1">GeoJSON, CSV, Shapefile (.zip), or Parquet</p>
+          </div>
+        </div>
+      )}
+
       {/* Add Data button */}
       <div className="absolute top-4 left-4 z-10">
         <div className="bg-white rounded-lg shadow-lg">
@@ -1148,6 +1274,29 @@ const MapViewerGL: React.FC = () => {
             >
               Add Data
             </button>
+            <div className="mt-5 pt-5 border-t border-gray-200">
+              <p className="text-xs text-gray-400 mb-3">Or try with sample data:</p>
+              <div className="flex gap-2 justify-center">
+                <button
+                  onClick={() => loadSampleData('cities')}
+                  className="px-3 py-1.5 text-xs bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  US Cities
+                </button>
+                <button
+                  onClick={() => loadSampleData('states')}
+                  className="px-3 py-1.5 text-xs bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  US States
+                </button>
+                <button
+                  onClick={() => loadSampleData('both')}
+                  className="px-3 py-1.5 text-xs bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  Both
+                </button>
+              </div>
+            </div>
             <p className="text-xs text-gray-400 mt-4">No data leaves your browser</p>
           </div>
         </div>
