@@ -80,17 +80,17 @@ export const getNumericValuesForColumn = (
     filteredData = activeFilters[layer.id]?.length > 0
       ? layer.data.features.filter((item: Feature) => activeFilters[layer.id].every(filter => filter.fn(item)))
       : layer.data.features;
-    return filteredData.map((f: Feature) => getValue(f.properties)).filter((v): v is number => v !== null);
+    return filteredData.map((f: Feature) => getValue(f.properties)).filter((v: number | null): v is number => v !== null);
   } else if (layer.type === 'point') {
     filteredData = activeFilters[layer.id]?.length > 0
       ? layer.data.filter((item: { properties: { [key: string]: any } }) => activeFilters[layer.id].every(filter => filter.fn(item)))
       : layer.data;
-    return filteredData.map((d: { properties: { [key: string]: any } }) => getValue(d.properties)).filter((v): v is number => v !== null);
+    return filteredData.map((d: { properties: { [key: string]: any } }) => getValue(d.properties)).filter((v: number | null): v is number => v !== null);
   } else if (layer.type === 'h3') {
     filteredData = activeFilters[layer.id]?.length > 0
       ? layer.data.filter((item: { properties: { [key: string]: any } }) => activeFilters[layer.id].every(filter => filter.fn({ properties: item.properties })))
       : layer.data;
-    return filteredData.map((d: { properties: { [key: string]: any } }) => getValue(d.properties)).filter((v): v is number => v !== null);
+    return filteredData.map((d: { properties: { [key: string]: any } }) => getValue(d.properties)).filter((v: number | null): v is number => v !== null);
   }
   return [];
 };

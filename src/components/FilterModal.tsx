@@ -99,8 +99,10 @@ export const FilterModal: React.FC<FilterModalProps> = ({
         let min = Infinity;
         let max = -Infinity;
         for (const v of values) {
-          if (v < min) min = v;
-          if (v > max) max = v;
+          const num = Number(v);
+          if (isNaN(num)) continue;
+          if (num < min) min = num;
+          if (num > max) max = num;
         }
         setNumericRange({ min, max });
       } else if (column?.type === 'text' && column.uniqueValues) {
@@ -172,7 +174,8 @@ export const FilterModal: React.FC<FilterModalProps> = ({
       } else {
         filterFn = (item: any) => {
           const itemProps = item.properties || item;
-          const value = itemProps[selectedColumn];
+          const value = Number(itemProps[selectedColumn]);
+          if (isNaN(value)) return false;
           return value >= numericRange.min && value <= numericRange.max;
         };
         filterInfo = {

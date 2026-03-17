@@ -46,6 +46,7 @@ src/
 │   ├── geometry.ts                # Coordinate extraction from GeoJSON features
 │   ├── layers.ts                  # deck.gl layer factory (GeoJsonLayer, ScatterplotLayer, H3HexagonLayer)
 │   ├── shapefile.ts               # Shapefile (.zip) parsing via shpjs
+│   ├── tableName.ts               # sanitizeTableName — extracted from duckdb.ts for code splitting
 │   └── __tests__/                 # Vitest unit tests for all utility modules
 ```
 
@@ -91,7 +92,7 @@ File upload → parse (CSV/GeoJSON/Shapefile/Parquet)
 - H3 column detection only validates the first preview row
 - BigInt values silently converted to Number (precision loss > 2^53)
 - maplibre-gl and vendor-deckgl chunks exceed 800 KB (expected for these libraries)
-- `papaparse` static import in MapViewerGL.tsx prevents full code splitting of duckdb.ts
+- `papaparse` is still statically imported in MapViewerGL.tsx (used for CSV parsing); `sanitizeTableName` extracted to `tableName.ts` to restore DuckDB lazy-load
 
 ## Common Tasks
 

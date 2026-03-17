@@ -13,7 +13,7 @@ import { basemapOptions } from '../types';
 import { calculateBounds, hexToRGB, getColorForValue, getSizeForValue } from '../utils/geometry';
 import { detectCoordinateColumns, detectH3Column, isValidH3Index, processChunk } from '../utils/csv';
 import { getNumericValuesForColumn } from '../utils/layers';
-import { sanitizeTableName } from '../utils/duckdb';
+import { sanitizeTableName } from '../utils/tableName';
 
 import { FilterModal } from './FilterModal';
 import { CSVPreviewModal } from './CSVPreviewModal';
@@ -269,7 +269,7 @@ const MapViewerGL: React.FC = () => {
         const { registerPlainCSVTable } = await import('../utils/duckdb');
         const { initDuckDB } = await import('../utils/duckdb');
         await initDuckDB();
-        const { tableName, columns } = await registerPlainCSVTable(file);
+        const { tableName, columns } = await registerPlainCSVTable(file, csvPreview.selectedColumns);
         setDuckdbOnlyTables(prev => [...prev, {
           tableName, fileName: file.name, sourceType: 'csv', columns,
         }]);
@@ -683,7 +683,7 @@ const MapViewerGL: React.FC = () => {
 
   const exportConfiguration = () => {
     const config: MapConfiguration = {
-      version: "2.0.0",
+      version: "2.1.0",
       viewState,
       basemap: mapStyle,
       layers: layers.map(layer => ({

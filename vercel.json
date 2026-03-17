@@ -1,7 +1,7 @@
 {
   "framework": "vite",
   "buildCommand": "yarn build",
-  "installCommand": "yarn install --immutable",
+  "installCommand": "corepack enable && yarn install --immutable",
   "headers": [
     {
       "source": "/(.*)",

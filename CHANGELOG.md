@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.1] - 2026-03-17
+
+### Fixed
+- **Vercel Yarn 4 compatibility** — `vercel.json` now runs `corepack enable` before `yarn install --immutable` so Vercel uses Yarn 4 (Berry) instead of falling back to Yarn 1.22
+- **FilterModal numeric coercion** — min/max range calculation and range filter now cast values to `Number()` and skip `NaN`, fixing incorrect ranges when CSV columns contain string-formatted numbers
+- **TypeScript strict errors** — added explicit type annotations to 3 `.filter()` callbacks in `layers.ts` that had implicit `any` (TS7006)
+- **Config export version** — `exportConfiguration()` now writes `"2.1.0"` matching the actual package version (was hardcoded to `"2.0.0"`)
+- **CSS boilerplate cleanup** — removed Vite starter CSS rules (`#root` max-width/padding, `.logo`, dark-mode `:root`) from `App.css` and `index.css` that conflicted with full-screen map layout
+
+### Changed
+- **DuckDB lazy-load restored** — extracted `sanitizeTableName` to `src/utils/tableName.ts` so `MapViewerGL.tsx` no longer statically imports `duckdb.ts`; DuckDB WASM bundle is truly lazy-loaded again
+- **CSV column selection now functional** — `registerPlainCSVTable` accepts an optional `selectedColumns` parameter; DuckDB-only CSV imports now respect the user's column selection instead of importing all columns
+
 ## [2.2.0] - 2026-03-14
 
 ### Added
