@@ -3,15 +3,13 @@
   "private": true,
   "version": "2.1.0",
   "type": "module",
-  "homepage": "https://bobsa514.github.io/mapviewer-gl/",
+  "homepage": "https://mapviewer-gl.vercel.app",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint . --max-warnings 5",
     "test": "vitest run",
-    "preview": "vite preview",
-    "predeploy": "yarn build",
-    "deploy": "gh-pages -d dist"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@arcgis/core": "^4.32.9",
@@ -54,7 +52,6 @@
     "eslint": "^9",
     "eslint-plugin-react-hooks": "^5",
     "eslint-plugin-react-refresh": "^0.4.5",
-    "gh-pages": "^6.3.0",
     "globals": "^17.4.0",
     "postcss": "8.4.35",
     "tailwindcss": "3.4.1",

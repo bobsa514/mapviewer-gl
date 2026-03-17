@@ -4,7 +4,7 @@
 
 Upload your data, style it on an interactive map, and run spatial queries — all locally in the browser with zero server-side processing.
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-blue?style=for-the-badge)](https://bobsa514.github.io/mapviewer-gl/)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?style=for-the-badge)](https://mapviewer-gl.vercel.app)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 [![Built with](https://img.shields.io/badge/Built%20with-React%20%2B%20deck.gl-61DAFB?style=for-the-badge)](https://deck.gl/)
 
@@ -77,7 +77,7 @@ yarn install
 yarn dev               # http://localhost:5173
 ```
 
-Or just use the [live demo](https://bobsa514.github.io/mapviewer-gl/) — no install needed.
+Or just use the [live demo](https://mapviewer-gl.vercel.app) — no install needed.
 
 ## Tech Stack
 
@@ -120,7 +120,7 @@ src/
 
 ## Deployment
 
-Automatically deployed to GitHub Pages on push to `main` via GitHub Actions.
+Automatically deployed to [Vercel](https://mapviewer-gl.vercel.app) on push to `main`. CI checks (lint, test, build) run via GitHub Actions.
 
 ## Contributing
 

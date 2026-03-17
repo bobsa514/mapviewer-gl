@@ -3,8 +3,8 @@
 ## Project Overview
 MapViewer-GL is a **client-side** geospatial data viewer built with React, deck.gl, and MapLibre GL JS. All data processing happens in the browser — no backend. Users upload GeoJSON, CSV, Shapefile, or Parquet files, style them on an interactive map, and run SQL queries via DuckDB-WASM.
 
-**Live demo:** https://bobsa514.github.io/mapviewer-gl/
-**Deployed via:** GitHub Pages (GitHub Actions CI in `.github/workflows/deploy.yml`)
+**Live demo:** https://mapviewer-gl.vercel.app
+**Deployed via:** Vercel (auto-deploy on push to `main`). CI checks in `.github/workflows/ci.yml`.
 
 ## Build & Dev Commands
 ```bash

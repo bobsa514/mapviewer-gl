@@ -11,6 +11,10 @@ All notable changes to this project will be documented in this file.
 - **Config export version** — `exportConfiguration()` now writes `"2.1.0"` matching the actual package version (was hardcoded to `"2.0.0"`)
 - **CSS boilerplate cleanup** — removed Vite starter CSS rules (`#root` max-width/padding, `.logo`, dark-mode `:root`) from `App.css` and `index.css` that conflicted with full-screen map layout
 
+### Removed
+- **GitHub Pages deployment** — removed `deploy.yml` workflow's gh-pages push step, `gh-pages` npm package, and `predeploy`/`deploy` scripts; deployment is now Vercel-only
+- **`gh-pages` branch** — deleted remote branch that was causing failed Vercel Preview builds
+
 ### Changed
 - **DuckDB lazy-load restored** — extracted `sanitizeTableName` to `src/utils/tableName.ts` so `MapViewerGL.tsx` no longer statically imports `duckdb.ts`; DuckDB WASM bundle is truly lazy-loaded again
 - **CSV column selection now functional** — `registerPlainCSVTable` accepts an optional `selectedColumns` parameter; DuckDB-only CSV imports now respect the user's column selection instead of importing all columns
