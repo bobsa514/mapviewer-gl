@@ -103,17 +103,25 @@ src/
     shapefile.ts            # Shapefile ZIP parsing (code-split)
     duckdb.ts               # DuckDB-WASM init, table registration, query execution (code-split)
   components/
-    MapViewerGL.tsx          # Main orchestrator — state management, deck.gl rendering
-    Toast.tsx                # Toast notification system
+    MapViewerGL.tsx          # Main orchestrator — state + 3-column shell
+    Topbar.tsx               # Brand + coord/zoom meta + SQL/Share/Export/Add data
+    LayersPanel.tsx          # Left-rail layer list (swatch + hover actions)
+    SymbologyPanel.tsx       # Left-rail symbology controls (color, opacity, classification)
+    FilterPanel.tsx          # Left-rail filter builder (replaces the old FilterModal)
+    Inspector.tsx            # Right-rail feature inspector
+    EmptyState.tsx           # Welcome screen with sample cards
+    MapControls.tsx          # Zoom in/out/recenter (top-right of map)
+    BasemapSelector.tsx      # Carto Light / Dark / OSM segmented pill
+    LegendDisplay.tsx        # Color ramp + breaks card
+    SQLEditor.tsx            # DuckDB-WASM workspace overlay
     AddDataModal.tsx         # Tabbed file upload modal
-    SQLEditor.tsx            # Split-pane SQL editor with results table
-    LayersPanel.tsx          # Layer list with symbology controls and drag reorder
-    FilterModal.tsx          # Column-level data filtering
     CSVPreviewModal.tsx      # CSV column selection before import
     GeoJSONPreviewModal.tsx  # GeoJSON property selection before import
-    FeaturePropertiesPanel.tsx # On-click feature attribute inspector
-    BasemapSelector.tsx      # Basemap style picker
-    LegendDisplay.tsx        # Color and size legends
+    Toast.tsx                # Toast notification system (dark pill, center-bottom)
+    ErrorBoundary.tsx        # Rendering-crash recovery UI
+    icons.tsx                # Shared inline SVG icons
+  styles/
+    design.css               # OKLCH design system + component classes
 ```
 
 </details>

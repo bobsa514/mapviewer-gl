@@ -8,9 +8,19 @@
 
 import type { MapViewState } from '@deck.gl/core';
 import type { Feature } from 'geojson';
-import type { FilterInfo } from './components/FilterModal';
 
-export type { FilterInfo };
+/** Comparison operators supported by numeric and text filters. */
+export type ComparisonOperator = '=' | '<=' | '<' | '>' | '>=';
+
+/** A single active filter on a layer. Persisted in MapConfiguration. */
+export interface FilterInfo {
+  column: string;
+  type: 'numeric' | 'text';
+  value:
+    | { type: 'range'; min: number; max: number }
+    | { type: 'comparison'; operator: ComparisonOperator; value: number | string }
+    | { type: 'multiple'; values: string[] };
+}
 
 /** Available sequential color scale names (ColorBrewer-inspired). */
 export type ColorScaleName = 'Reds' | 'Blues' | 'Greens' | 'Greys' | 'YlGnBu' | 'YlOrRd' | 'PuBuGn' | 'RdPu';
@@ -64,7 +74,6 @@ export interface LayerInfo {
     lng: string;
   };
   pointSize?: number;
-  isExpanded?: boolean;
   isH3Data?: boolean;
   h3Column?: string;
 }
