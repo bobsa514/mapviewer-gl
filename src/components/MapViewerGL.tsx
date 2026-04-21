@@ -678,17 +678,20 @@ const MapViewerGL: React.FC = () => {
                   }
                 }
               } else if (filterInfo.type === 'text') {
-                const strValue = String(value).toLowerCase();
+                const raw = String(value ?? '');
                 if (filterInfo.value.type === 'multiple') {
-                  return filterInfo.value.values.some((v) => strValue.includes(v.toLowerCase()));
+                  // `contains` — case-insensitive substring, OR over values.
+                  const lower = raw.toLowerCase();
+                  return filterInfo.value.values.some((v) => lower.includes(v.toLowerCase()));
                 } else if (filterInfo.value.type === 'comparison') {
-                  const compValue = String(filterInfo.value.value).toLowerCase();
+                  // Comparison preserves case — mirrors the old FilterModal.
+                  const compValue = String(filterInfo.value.value);
                   switch (filterInfo.value.operator) {
-                    case '=': return strValue === compValue;
-                    case '<': return strValue < compValue;
-                    case '<=': return strValue <= compValue;
-                    case '>': return strValue > compValue;
-                    case '>=': return strValue >= compValue;
+                    case '=': return raw === compValue;
+                    case '<': return raw < compValue;
+                    case '<=': return raw <= compValue;
+                    case '>': return raw > compValue;
+                    case '>=': return raw >= compValue;
                     default: return true;
                   }
                 }

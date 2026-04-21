@@ -1,7 +1,16 @@
 /**
  * Left-rail filter panel. Replaces the old modal-style FilterModal but preserves
- * the same filter capabilities: numeric range, numeric/text comparison, and
- * text multi-select (comma-separated values).
+ * the same filter capabilities:
+ *   - numeric `range` — bounded inclusive range (min ≤ v ≤ max)
+ *   - numeric/text `=`, `<`, `<=`, `>`, `>=` — exact comparison (serialized as
+ *     `type: 'comparison'`)
+ *   - text `contains` — case-insensitive substring match with comma-separated
+ *     OR semantics (serialized as `type: 'multiple'`)
+ *
+ * The `=` operator for text is *exact* and case-sensitive, matching the old
+ * FilterModal's direct-text-input path. Use `contains` for the old
+ * multi-select/partial-match behavior. This split is load-bearing so that
+ * imported saved sessions keep their semantics.
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
@@ -9,6 +18,10 @@ import type { LayerInfo, FilterInfo } from '../types';
 import { CloseIcon } from './icons';
 
 type ComparisonOperator = '=' | '<=' | '<' | '>=' | '>';
+/** Operators available in the rail UI. `range` (numeric) and `contains` (text)
+ *  are UI-only variants that serialize to `type: 'range'` and `type: 'multiple'`
+ *  respectively. The five comparison operators serialize to `type: 'comparison'`. */
+type Operator = ComparisonOperator | 'range' | 'contains';
 
 type ColumnMeta = {
   name: string;
@@ -82,17 +95,21 @@ const buildFilterFn = (column: ColumnMeta, info: FilterInfo): (item: any) => boo
         case '>=': return n >= v;
       }
     }
-    const s = String(raw ?? '').toLowerCase();
+    const raw_s = String(raw ?? '');
     if (info.value.type === 'multiple') {
-      return info.value.values.some((v) => s.includes(v.toLowerCase()));
+      // `contains` is case-insensitive substring match with OR-of-values.
+      const lower = raw_s.toLowerCase();
+      return info.value.values.some((v) => lower.includes(v.toLowerCase()));
     }
-    const v = String(info.value.value).toLowerCase();
+    // `comparison` ops preserve case to match the old FilterModal semantics
+    // (case-sensitive `===` for `=`, lexicographic compare for ordering ops).
+    const v = String(info.value.value);
     switch (info.value.operator) {
-      case '=': return s === v;
-      case '<': return s < v;
-      case '<=': return s <= v;
-      case '>': return s > v;
-      case '>=': return s >= v;
+      case '=': return raw_s === v;
+      case '<': return raw_s < v;
+      case '<=': return raw_s <= v;
+      case '>': return raw_s > v;
+      case '>=': return raw_s >= v;
     }
     return true;
   };
@@ -107,7 +124,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   const items = useMemo(() => extractDataItems(layer), [layer]);
   const columns = useMemo(() => buildColumns(items), [items]);
   const [colName, setColName] = useState<string>('');
-  const [op, setOp] = useState<ComparisonOperator | 'range'>('=');
+  const [op, setOp] = useState<Operator>('=');
   const [value, setValue] = useState<string>('');
   const [rangeMin, setRangeMin] = useState<string>('');
   const [rangeMax, setRangeMax] = useState<string>('');
@@ -120,20 +137,25 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
 
   const currentCol = columns.find((c) => c.name === colName);
 
+  // Reset the draft whenever the selected layer OR the selected column changes.
+  // Keying off layer.id is load-bearing — two layers can have the same column
+  // name (e.g. `name`, `population`), and without this a stale value/range from
+  // the previous layer would silently apply to the new one.
   useEffect(() => {
-    // When column changes, reset operator/value; prefill range for numeric
     setValue('');
     if (currentCol?.type === 'numeric') {
       setRangeMin(currentCol.min !== undefined ? String(currentCol.min) : '');
       setRangeMax(currentCol.max !== undefined ? String(currentCol.max) : '');
-      if (op === 'range') return; // keep range mode
+      // `contains` is text-only — reset to `=` so the dropdown stays valid.
+      if (op === 'contains') setOp('=');
     } else {
       setRangeMin('');
       setRangeMax('');
+      // `range` is numeric-only — reset to `=` so the dropdown stays valid.
       if (op === 'range') setOp('=');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colName]);
+  }, [layer.id, colName]);
 
   const handleApply = () => {
     if (!currentCol) return;
@@ -144,6 +166,8 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         const max = parseFloat(rangeMax);
         if (isNaN(min) || isNaN(max)) return;
         info = { column: currentCol.name, type: 'numeric', value: { type: 'range', min, max } };
+      } else if (op === 'contains') {
+        return; // `contains` is text-only
       } else {
         const n = parseFloat(value);
         if (isNaN(n)) return;
@@ -151,16 +175,17 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
       }
     } else {
       if (op === 'range') return;
-      if (op === '=' && value.includes(',')) {
-        const values = value.split(',').map((v) => v.trim()).filter(Boolean);
+      const trimmed = value.trim();
+      if (trimmed.length === 0) return;
+      if (op === 'contains') {
+        // Split on comma for OR semantics; trim empties. Single value → [value].
+        const values = trimmed.split(',').map((v) => v.trim()).filter(Boolean);
         if (values.length === 0) return;
         info = { column: currentCol.name, type: 'text', value: { type: 'multiple', values } };
-      } else if (op === '=' && value.trim().length > 0) {
-        info = { column: currentCol.name, type: 'text', value: { type: 'multiple', values: [value.trim()] } };
-      } else if (value.trim().length > 0) {
-        info = { column: currentCol.name, type: 'text', value: { type: 'comparison', operator: op, value: value.trim() } };
       } else {
-        return;
+        // `=`, `<`, `<=`, `>`, `>=` all use exact comparison — preserves parity
+        // with the old FilterModal where direct-text `=` was case-sensitive ===.
+        info = { column: currentCol.name, type: 'text', value: { type: 'comparison', operator: op, value: trimmed } };
       }
     }
 
@@ -168,9 +193,9 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
     setValue('');
   };
 
-  const opOptions: Array<ComparisonOperator | 'range'> = currentCol?.type === 'numeric'
+  const opOptions: Operator[] = currentCol?.type === 'numeric'
     ? ['=', '<', '<=', '>', '>=', 'range']
-    : ['=', '<', '<=', '>', '>='];
+    : ['=', '<', '<=', '>', '>=', 'contains'];
 
   return (
     <div className="panel-section">
@@ -191,7 +216,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
               {f.info.value.type === 'range'
                 ? 'range'
                 : f.info.value.type === 'multiple'
-                ? '='
+                ? 'contains'
                 : f.info.value.operator}
             </span>
             <code>
@@ -241,7 +266,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
               className="select"
               style={{ width: 86 }}
               value={op}
-              onChange={(e) => setOp(e.target.value as ComparisonOperator | 'range')}
+              onChange={(e) => setOp(e.target.value as Operator)}
               aria-label="Filter operator"
             >
               {opOptions.map((o) => (
@@ -278,7 +303,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                 style={{ flex: 1 }}
                 type={currentCol?.type === 'numeric' ? 'number' : 'text'}
                 placeholder={
-                  currentCol?.type === 'text' && op === '='
+                  currentCol?.type === 'text' && op === 'contains'
                     ? 'value (comma-separated for OR)'
                     : 'value'
                 }
@@ -289,9 +314,14 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
               <button className="btn sm accent" onClick={handleApply}>Add</button>
             </div>
           )}
+          {currentCol?.type === 'text' && op === 'contains' && (
+            <div className="muted" style={{ fontSize: 11 }}>
+              Case-insensitive substring match. Use commas to OR multiple terms.
+            </div>
+          )}
           {currentCol?.type === 'text' && op === '=' && (
             <div className="muted" style={{ fontSize: 11 }}>
-              Matches if the cell contains any of the comma-separated terms.
+              Exact, case-sensitive match. Use <code>contains</code> for partial or multi-term matches.
             </div>
           )}
         </div>
