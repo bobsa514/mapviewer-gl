@@ -43,3 +43,8 @@ dist-ssr
 .env.production.local
 .gstack/
 docs/council/
+
+# tsc build outputs
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js

@@ -110,6 +110,58 @@ const MapViewerGL: React.FC = () => {
   const [selectedLayerId, setSelectedLayerId] = useState<number | null>(null);
   const [editTarget, setEditTarget] = useState<'style' | 'filter'>('style');
 
+  // Shell chrome: left-rail width (draggable, persisted) + inspector collapse.
+  //
+  // We distinguish the user's *preferred* width (persisted) from the
+  // *effective* width used for layout. If the viewport is narrow or the
+  // inspector is visible, the effective width may be smaller; the preferred
+  // width is restored once there's room again. Without this split, a
+  // temporary window-shrink would overwrite localStorage and permanently
+  // narrow the user's saved preference.
+  const LEFT_RAIL_MIN = 220;
+  const LEFT_RAIL_MAX = 480;
+  const LEFT_RAIL_DEFAULT = 280;
+  const MIN_CENTER_WIDTH = 360;
+  const RIGHT_RAIL_WIDTH = 300;
+
+  const [preferredLeftRailWidth, setPreferredLeftRailWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return LEFT_RAIL_DEFAULT;
+    const raw = window.localStorage.getItem('mvgl.leftRailWidth');
+    const n = raw ? parseInt(raw, 10) : NaN;
+    const valid = !isNaN(n) && n >= LEFT_RAIL_MIN && n <= LEFT_RAIL_MAX ? n : LEFT_RAIL_DEFAULT;
+    return valid;
+  });
+  const [inspectorVisible, setInspectorVisible] = useState<boolean>(true);
+  const [isResizingRail, setIsResizingRail] = useState(false);
+  const [windowWidth, setWindowWidth] = useState<number>(() =>
+    typeof window === 'undefined' ? 1280 : window.innerWidth
+  );
+
+  // Persist ONLY the preferred width (never the dynamically clamped effective
+  // value), so temporary viewport narrowing doesn't overwrite the user's
+  // saved preference.
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('mvgl.leftRailWidth', String(preferredLeftRailWidth));
+    }
+  }, [preferredLeftRailWidth]);
+
+  // Track viewport width so `effectiveLeftRailWidth` recomputes on resize.
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const dynamicMaxLeftRailWidth = Math.max(
+    LEFT_RAIL_MIN,
+    Math.min(LEFT_RAIL_MAX, windowWidth - (inspectorVisible ? RIGHT_RAIL_WIDTH : 0) - MIN_CENTER_WIDTH)
+  );
+  const effectiveLeftRailWidth = Math.max(
+    LEFT_RAIL_MIN,
+    Math.min(dynamicMaxLeftRailWidth, preferredLeftRailWidth)
+  );
+
   // DuckDB
   const [registeredTables, setRegisteredTables] = useState<string[]>([]);
   const registeredTablesRef = useRef<string[]>([]);
@@ -1246,6 +1298,47 @@ const MapViewerGL: React.FC = () => {
   const zoomOut = () => setViewState((prev) => ({ ...prev, zoom: Math.max(0, prev.zoom - 1) }));
   const recenter = () => setViewState(DEFAULT_VIEW_STATE);
 
+  // Auto-reopen the inspector ONLY on the false → true edge of isFeatureLocked
+  // (i.e., the moment a user clicks a feature to pin it). Using a ref-tracked
+  // previous value prevents the effect from re-firing when the user hides the
+  // inspector while a feature is already pinned.
+  const prevIsFeatureLockedRef = useRef(isFeatureLocked);
+  useEffect(() => {
+    if (isFeatureLocked && !prevIsFeatureLockedRef.current) {
+      setInspectorVisible(true);
+    }
+    prevIsFeatureLockedRef.current = isFeatureLocked;
+  }, [isFeatureLocked]);
+
+  // Draggable left-rail divider. Uses Pointer Events + setPointerCapture so
+  // we keep receiving move/up events even if the user drags outside the
+  // window. This is more robust than document-level mouse listeners, which
+  // can miss a mouseup that happens on another window.
+  const handleRailPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+    setIsResizingRail(true);
+  }, []);
+
+  const handleRailPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!(e.currentTarget as HTMLElement).hasPointerCapture?.(e.pointerId)) return;
+    // Drag updates the *preferred* width. The clamp against dynamicMax here
+    // means the visible divider tracks the cursor up to the effective
+    // ceiling, while the preferred value itself is stored as what the user
+    // last explicitly chose.
+    const next = Math.max(LEFT_RAIL_MIN, Math.min(dynamicMaxLeftRailWidth, e.clientX));
+    setPreferredLeftRailWidth(next);
+  }, [dynamicMaxLeftRailWidth]);
+
+  const handleRailPointerUp = useCallback((e: React.PointerEvent) => {
+    const target = e.currentTarget as HTMLElement;
+    if (target.hasPointerCapture?.(e.pointerId)) {
+      target.releasePointerCapture(e.pointerId);
+    }
+    setIsResizingRail(false);
+  }, []);
+
   // --- ⌘K keyboard shortcut for SQL ---
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1269,9 +1362,14 @@ const MapViewerGL: React.FC = () => {
   );
   const selectedLayerFilters = selectedLayer ? activeFilters[selectedLayer.id] ?? [] : [];
 
+  const gridTemplateColumns = inspectorVisible
+    ? `${effectiveLeftRailWidth}px 1fr ${RIGHT_RAIL_WIDTH}px`
+    : `${effectiveLeftRailWidth}px 1fr`;
+
   return (
     <div
-      className={`app ${isDraggingOver ? 'drag-over' : ''}`}
+      className={`app ${isDraggingOver ? 'drag-over' : ''} ${isResizingRail ? 'resizing-rail' : ''}`}
+      style={{ gridTemplateColumns }}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
@@ -1423,25 +1521,58 @@ const MapViewerGL: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* Floating reopen affordance — only when inspector is hidden and we
+            have a session to inspect. Chevron-left points toward the (absent)
+            rail to signal "expand into that space". */}
+        {hasSession && !inspectorVisible && (
+          <button
+            className="inspector-reopen"
+            title="Show inspector"
+            aria-label="Show inspector panel"
+            onClick={() => setInspectorVisible(true)}
+          >
+            <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10 4l-4 4 4 4" />
+            </svg>
+          </button>
+        )}
       </div>
 
-      {/* Right rail */}
-      <aside className="rail-right scroll">
-        <Inspector
-          feature={selectedFeature}
-          isPinned={isFeatureLocked}
-          layerName={inspectorLayer?.name}
-          onTogglePin={() => {
-            if (!selectedFeature) return;
-            setIsFeatureLocked((v) => !v);
-          }}
-          onClear={() => {
-            setSelectedFeature(null);
-            setIsFeatureLocked(false);
-            setHoveredLayerId(null);
-          }}
-        />
-      </aside>
+      {/* Right rail (collapsible) */}
+      {inspectorVisible && (
+        <aside className="rail-right scroll">
+          <Inspector
+            feature={selectedFeature}
+            isPinned={isFeatureLocked}
+            layerName={inspectorLayer?.name}
+            onTogglePin={() => {
+              if (!selectedFeature) return;
+              setIsFeatureLocked((v) => !v);
+            }}
+            onClear={() => {
+              setSelectedFeature(null);
+              setIsFeatureLocked(false);
+              setHoveredLayerId(null);
+            }}
+            onHide={() => setInspectorVisible(false)}
+          />
+        </aside>
+      )}
+
+      {/* Left-rail drag divider — overlays the rail/map boundary. Positioned
+          via leftRailWidth so it tracks live as the user drags. */}
+      <div
+        className={`rail-divider ${isResizingRail ? 'dragging' : ''}`}
+        style={{ left: `${effectiveLeftRailWidth}px`, touchAction: 'none' }}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize layers panel"
+        onPointerDown={handleRailPointerDown}
+        onPointerMove={handleRailPointerMove}
+        onPointerUp={handleRailPointerUp}
+        onLostPointerCapture={() => setIsResizingRail(false)}
+      />
 
       {/* Modals */}
       <AddDataModal

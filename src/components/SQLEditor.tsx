@@ -338,18 +338,16 @@ export const SQLEditor: React.FC<SQLEditorProps> = ({
                 <tbody>
                   {result.rows.slice(0, 1000).map((row, i) => (
                     <tr key={i}>
-                      {row.map((v, j) => (
-                        <td
-                          key={j}
-                          className={
-                            v === null || v === undefined
-                              ? 'null'
-                              : typeof v === 'number'
-                              ? 'num'
-                              : ''
-                          }
-                        >
-                          {v === null || v === undefined
+                      {row.map((v, j) => {
+                        const isNull = v === null || v === undefined;
+                        const cls = isNull ? 'null' : typeof v === 'number' ? 'num' : '';
+                        // title attr gives hover-to-see-full-value for long
+                        // cells (JSON, WKT, URLs) — the cell itself has no
+                        // max-width so copy/paste and horizontal scroll work.
+                        const full = isNull ? 'null' : String(v);
+                        return (
+                        <td key={j} className={cls} title={full}>
+                          {isNull
                             ? 'null'
                             : typeof v === 'boolean'
                             ? String(v)
@@ -357,7 +355,8 @@ export const SQLEditor: React.FC<SQLEditorProps> = ({
                             ? v.toLocaleString()
                             : String(v)}
                         </td>
-                      ))}
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>

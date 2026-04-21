@@ -8,6 +8,9 @@ interface InspectorProps {
   layerName?: string;
   onTogglePin: () => void;
   onClear: () => void;
+  /** Collapse the right rail entirely. Parent re-opens on feature click or via a
+   *  separate reopen affordance. Omit to hide the collapse button. */
+  onHide?: () => void;
 }
 
 const formatCoordinate = (geom: Feature['geometry']): string | null => {
@@ -28,7 +31,17 @@ const primaryLabel = (props: Record<string, unknown>): string | null => {
   return null;
 };
 
-export const Inspector: React.FC<InspectorProps> = ({ feature, isPinned, layerName, onTogglePin, onClear }) => {
+const HideButton: React.FC<{ onHide?: () => void }> = ({ onHide }) =>
+  onHide ? (
+    <button className="icon-btn" title="Hide inspector" aria-label="Hide inspector" onClick={onHide}>
+      {/* chevron-right */}
+      <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M6 4l4 4-4 4" />
+      </svg>
+    </button>
+  ) : null;
+
+export const Inspector: React.FC<InspectorProps> = ({ feature, isPinned, layerName, onTogglePin, onClear, onHide }) => {
   if (!feature) {
     return (
       <div className="panel-section">
@@ -37,6 +50,7 @@ export const Inspector: React.FC<InspectorProps> = ({ feature, isPinned, layerNa
             <div className="panel-title">Inspect<em>.</em></div>
             <div className="panel-desc">Hover a feature — or click to pin</div>
           </div>
+          <HideButton onHide={onHide} />
         </div>
         <div
           style={{
@@ -88,6 +102,7 @@ export const Inspector: React.FC<InspectorProps> = ({ feature, isPinned, layerNa
           <button className="icon-btn" title="Close" aria-label="Clear selection" onClick={onClear}>
             <CloseIcon size={13} />
           </button>
+          <HideButton onHide={onHide} />
         </div>
       </div>
 

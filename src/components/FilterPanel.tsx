@@ -82,10 +82,24 @@ const buildColumns = (items: any[]): ColumnMeta[] => {
 const buildFilterFn = (column: ColumnMeta, info: FilterInfo): (item: any) => boolean => {
   return (item: any) => {
     const raw = item?.properties?.[column.name] ?? item?.[column.name];
+    // Discriminate on the inner `value.type` — the outer `info.type`
+    // ('numeric' | 'text') doesn't let TS narrow the inner union by itself.
+    if (info.value.type === 'range') {
+      const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
+      if (isNaN(n)) return false;
+      return n >= info.value.min && n <= info.value.max;
+    }
+    if (info.value.type === 'multiple') {
+      // `contains` — case-insensitive substring match with OR-of-values.
+      const lower = String(raw ?? '').toLowerCase();
+      return info.value.values.some((v) => lower.includes(v.toLowerCase()));
+    }
+    // value.type === 'comparison'. Numeric filters compare as numbers;
+    // text filters preserve case (matching the old FilterModal's direct-text
+    // `=` path).
     if (info.type === 'numeric') {
       const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
       if (isNaN(n)) return false;
-      if (info.value.type === 'range') return n >= info.value.min && n <= info.value.max;
       const v = Number(info.value.value);
       switch (info.value.operator) {
         case '=': return n === v;
@@ -96,13 +110,6 @@ const buildFilterFn = (column: ColumnMeta, info: FilterInfo): (item: any) => boo
       }
     }
     const raw_s = String(raw ?? '');
-    if (info.value.type === 'multiple') {
-      // `contains` is case-insensitive substring match with OR-of-values.
-      const lower = raw_s.toLowerCase();
-      return info.value.values.some((v) => lower.includes(v.toLowerCase()));
-    }
-    // `comparison` ops preserve case to match the old FilterModal semantics
-    // (case-sensitive `===` for `=`, lexicographic compare for ordering ops).
     const v = String(info.value.value);
     switch (info.value.operator) {
       case '=': return raw_s === v;

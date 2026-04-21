@@ -140,6 +140,49 @@ input, select, textarea { font: inherit; color: inherit; }
 /* Map area */
 .map-wrap { position: relative; overflow: hidden; background: var(--bg-map); min-width: 0; min-height: 0; }
 
+/* Left-rail drag handle — absolutely positioned on the rail/map boundary.
+   The rail itself handles sizing via the app's grid-template-columns; this
+   is purely the gesture surface. */
+.rail-divider {
+  position: absolute;
+  top: 44px;  /* below topbar */
+  bottom: 0;
+  width: 6px;
+  transform: translateX(-3px);
+  cursor: col-resize;
+  z-index: 11;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.rail-divider:hover,
+.rail-divider.dragging { background: var(--accent-soft); }
+
+/* During a rail drag we want col-resize everywhere and no accidental text
+   selection — applied on the app root, inherited by all children. */
+.app.resizing-rail,
+.app.resizing-rail * { cursor: col-resize !important; user-select: none; }
+
+/* Floating reopen button — appears at the right edge of the map when the
+   inspector rail is hidden. Same visual language as .map-ctrl. */
+.inspector-reopen {
+  position: absolute;
+  /* Sits below the 3-button map-ctrls stack (top:14 + 3 × (32+4) = ~126px). */
+  top: 130px;
+  right: 14px;
+  z-index: 6;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink-2);
+  box-shadow: var(--shadow-md);
+  transition: background 100ms ease;
+}
+.inspector-reopen:hover { background: var(--bg-sunken); color: var(--ink); }
+
 /* deck.gl creates an absolutely-positioned wrapper + a canvas element with no
    inline size; force both to fill the parent so the grid cell drives the size. */
 .map-wrap > #deckgl-wrapper,
@@ -463,7 +506,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .basemap-switcher {
   position: absolute;
   bottom: 14px;
-  right: 14px;
+  left: 14px;
   z-index: 5;
   background: var(--bg-raised);
   border: 1px solid var(--line);
@@ -486,7 +529,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .legend {
   position: absolute;
   bottom: 14px;
-  left: 14px;
+  right: 14px;
   z-index: 5;
   background: var(--bg-raised);
   border: 1px solid var(--line);
@@ -687,7 +730,10 @@ input, select, textarea { font: inherit; color: inherit; }
   flex-shrink: 0;
 }
 .sql-table-row .cols { margin-left: auto; color: var(--ink-4); font-size: 10.5px; }
-.sql-main { display: flex; flex-direction: column; min-height: 0; }
+/* min-width: 0 is load-bearing — without it the grid cell expands to fit
+   the widest results-table row, which pushes the Run button, Export CSV,
+   and Add-as-map-layer buttons past the overlay's right edge. */
+.sql-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .sql-editor {
   font-family: var(--font-mono);
   font-size: 13px;
@@ -712,8 +758,9 @@ input, select, textarea { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--line-2);
   font-size: 11.5px;
   color: var(--ink-3);
+  flex-shrink: 0;  /* keep the Run button visible regardless of result width */
 }
-.sql-templates { display: flex; gap: 4px; flex-wrap: wrap; }
+.sql-templates { display: flex; gap: 4px; flex-wrap: wrap; min-width: 0; }
 .sql-tpl {
   font-size: 11px;
   padding: 3px 8px;
@@ -731,15 +778,20 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .sql-results {
   flex: 1;
-  overflow: auto;
+  overflow: auto;  /* horizontal + vertical scroll when results overflow */
   min-height: 0;
+  min-width: 0;
 }
 .sql-results table {
   border-collapse: collapse;
-  width: 100%;
+  /* min-width: 100% lets the table grow past the container when the row is
+     wider than the overlay, which is what triggers .sql-results's horizontal
+     scrollbar. Paired with white-space: nowrap on cells below. */
+  min-width: 100%;
   font-family: var(--font-mono);
   font-size: 11.5px;
 }
+.sql-results th, .sql-results td { white-space: nowrap; }
 .sql-results th {
   text-align: left;
   padding: 6px 12px;
@@ -773,6 +825,8 @@ input, select, textarea { font: inherit; color: inherit; }
   background: var(--bg-sunken);
   font-size: 11.5px;
   color: var(--ink-3);
+  flex-shrink: 0;
+  flex-wrap: wrap;  /* Export CSV / Add-as-layer wrap to next line on narrow overlays */
 }
 .sql-meta .stat {
   display: flex;
