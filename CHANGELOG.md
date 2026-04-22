@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.0] - 2026-04-20
+
+Visual redesign pass — new editorial design system, topbar, rail-based panels. All functional features (DuckDB-WASM, deck.gl, file parsers, filter semantics, config I/O, URL-hash sharing) are preserved.
+
+### Added
+- **Editorial design system** — OKLCH color space with muted-lilac accent (hue 253), Instrument Serif display font, Inter UI (13px base), JetBrains Mono for data. Ported from the Claude Design handoff bundle in `docs/design/project/` into `src/styles/design.css`.
+- **3-column app shell** — persistent 280 px left rail (Layers + Symbology/Filter), 1fr map, 300 px right rail (Inspector), 44 px topbar. `MapViewerGL.tsx` owns the new grid layout.
+- **Topbar** — new `Topbar.tsx` exposes brand wordmark, layer count + live lat/lng/zoom, and SQL (⌘K) / Share view / Export / Add data actions.
+- **Inspector (right rail)** — new `Inspector.tsx` replaces the old floating `FeaturePropertiesPanel`; shows primary label, coordinates, and a key-value table of feature attributes with pin/unpin.
+- **Empty state** — new `EmptyState.tsx` renders a serif h1, privacy promise, and sample-data cards (US Major Cities, US States) when no data is loaded.
+- **Map controls** — new `MapControls.tsx` (zoom in/out/recenter) anchored top-right of the map.
+- **Segmented Style/Filter toggle** in the left rail — clicking a layer's style or filter icon selects the layer and switches which panel is showing.
+- **Google Fonts preconnect + `<link>`** for Instrument Serif, Inter, JetBrains Mono in `index.html`.
+
+### Changed
+- **Filter is now a rail panel, not a modal** — `FilterPanel.tsx` replaces `FilterModal.tsx`. All previous filter capabilities preserved: numeric range, numeric comparison, text comparison, and text multi-match (comma-separated values for OR semantics).
+- **Symbology is now a rail panel** — `SymbologyPanel.tsx` hosts color / opacity / point size / color-by-column with a 2×4 palette picker. Replaces the inline per-layer expand-to-style pattern.
+- **Layers panel re-skinned** — color swatch + name + mono meta row with hover-reveal actions (style, filter, visibility, rename, remove) and drag-to-reorder. SQL-only tables live in a separate section.
+- **SQLEditor re-skinned** — now a floating workspace overlay (not bottom-anchored) with a left sidebar for "Tables in scope" + templates, and a meta bar ("rows · time · Export CSV · Add as map layer") below results.
+- **BasemapSelector** — compact segmented pill (osm / light / dark) bottom-right of the map; no dropdown.
+- **LegendDisplay** — single compact card bottom-left with typographic title/column + horizontal color ramp + numeric breaks.
+- **Toast** — dark-pill style, center-bottom; type surfaces as a small colored dot instead of a full-colored background.
+- **Confirmation dialogs** (remove layer, import session) now use the `.modal` design-system class.
+- **State model in `MapViewerGL.tsx`** — added `selectedLayerId` and `editTarget ('style' | 'filter')`; removed `showFilterModal`, `showLayers`, and `selectedColumns`/`allAvailableColumns` (the Inspector now shows all attributes by default).
+- **LayerInfo type** — removed the unused `isExpanded` field.
+- **Config export version** bumped to `2.3.0`; `FilterInfo` type migrated from `FilterModal.tsx` into `types.ts`.
+- **Yarn 4 compat** — added `.yarnrc.yml` with `nodeLinker: node-modules` for Node 23+ compatibility (PnP loader fails with `EBADF` on newer Node).
+
+### Removed
+- `FilterModal.tsx` — replaced by `FilterPanel.tsx`.
+- `FeaturePropertiesPanel.tsx` — replaced by `Inspector.tsx`.
+- Floating Layers/SQL/Export toggle buttons (bottom-left) — actions moved to Topbar.
+- Welcome overlay card — replaced by full-map `EmptyState`.
+
+### Known limitations
+- Narrow-screen/mobile responsive layout is not addressed; the 3-column grid assumes desktop widths.
+- The `AddDataModal`, `CSVPreviewModal`, and `GeoJSONPreviewModal` remain on Tailwind styling (phase-2 re-skin).
+
 ## [2.2.1] - 2026-03-17
 
 ### Fixed

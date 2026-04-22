@@ -6,6 +6,18 @@ MapViewer-GL is a **client-side** geospatial data viewer built with React, deck.
 **Live demo:** https://mapviewer-gl.vercel.app
 **Deployed via:** Vercel (auto-deploy on push to `main`). CI checks in `.github/workflows/ci.yml`.
 
+## UI/UX Source of Truth
+
+The shipped UI is being replaced. When making ANY UI/UX decision on this repo, consult these first:
+- **`UX_SPEC.md`** (repo root) — functional spec: what the app does, user stories, screens. No design decisions.
+- **`docs/design/`** — Claude Design handoff bundle (visual source of truth). Key files:
+  - `docs/design/project/styles.css` — the design system in CSS (OKLCH, typography)
+  - `docs/design/project/MapViewer-GL.html` + `project/*.jsx` — interactive prototype
+  - `docs/design/chats/chat1.md` — designer/user conversation with intent + iteration history
+  - `docs/design/IMPLEMENTATION_PLAN.md` — step-by-step checklist for porting the design onto the real codebase (planned 2026-04-17, not yet executed)
+
+Do NOT defer to the current shipped UI when designing new things — it's being replaced per the plan above.
+
 ## Build & Dev Commands
 ```bash
 corepack enable          # Required first time — enables Yarn 4
@@ -26,18 +38,25 @@ src/
 ├── main.tsx                       # Entry point
 ├── types.ts                       # All shared TypeScript types (LayerInfo, CSVPreviewData, DuckDBOnlyTable, etc.)
 ├── components/
-│   ├── MapViewerGL.tsx            # Main component — owns ALL state, orchestrates everything
-│   ├── AddDataModal.tsx           # Centered modal with tabs: GeoJSON, CSV, Shapefile, Parquet, Config
-│   ├── CSVPreviewModal.tsx        # CSV column mapping (lat/lng selection or DuckDB-only mode)
-│   ├── SQLEditor.tsx              # DuckDB-WASM SQL editor with spatial extension
-│   ├── LayersPanel.tsx            # Layer list — visibility, remove, rename, symbology, filter, drag reorder
-│   ├── BasemapSelector.tsx        # Carto Light / Carto Dark / OSM switcher
-│   ├── FilterModal.tsx            # Per-column numeric/text filtering
-│   ├── FeaturePropertiesPanel.tsx # Click-to-inspect feature attributes
-│   ├── LegendDisplay.tsx          # Color and size legends
-│   ├── GeoJSONPreviewModal.tsx    # GeoJSON text preview
-│   ├── Toast.tsx                  # Toast notification system (useToast hook + ToastContainer)
-│   └── ErrorBoundary.tsx          # Catches rendering crashes, shows recovery UI
+│   ├── MapViewerGL.tsx            # Main component — owns ALL state, renders the 3-col grid shell
+│   ├── Topbar.tsx                 # Brand + layer/coord meta + SQL / Share / Export / Add data
+│   ├── LayersPanel.tsx            # Left-rail layer list (swatch + name + meta + hover actions)
+│   ├── SymbologyPanel.tsx         # Left-rail style panel — color, opacity, size, color-by-column
+│   ├── FilterPanel.tsx            # Left-rail filter panel — active filters + add-filter form
+│   ├── Inspector.tsx              # Right-rail feature inspector (pin/unpin)
+│   ├── EmptyState.tsx             # Welcome screen (eyebrow + serif h1 + sample cards)
+│   ├── MapControls.tsx            # Zoom in/out/recenter (top-right of map)
+│   ├── BasemapSelector.tsx        # Carto Light / Dark / OSM segmented pill (bottom-right of map)
+│   ├── LegendDisplay.tsx          # Color ramp + breaks card (bottom-left of map)
+│   ├── SQLEditor.tsx              # DuckDB-WASM workspace — floating overlay
+│   ├── AddDataModal.tsx           # Tabs: GeoJSON, CSV, Shapefile, Parquet, Config (Tailwind — phase-2 re-skin)
+│   ├── CSVPreviewModal.tsx        # CSV column mapping (Tailwind — phase-2 re-skin)
+│   ├── GeoJSONPreviewModal.tsx    # GeoJSON property selection (Tailwind — phase-2 re-skin)
+│   ├── Toast.tsx                  # Toast notification system (dark pill, center-bottom)
+│   ├── ErrorBoundary.tsx          # Catches rendering crashes, shows recovery UI
+│   └── icons.tsx                  # Shared inline SVG icons (editorial thin-stroke set)
+├── styles/
+│   └── design.css                 # OKLCH design tokens + component classes (ported from docs/design)
 ├── data/
 │   └── samples.ts                 # Built-in sample GeoJSON datasets (US Cities, US States)
 ├── utils/
@@ -52,10 +71,20 @@ src/
 
 ## Architecture
 
+### Visual design system (v2.3+)
+- **Source of truth:** `src/styles/design.css` (OKLCH tokens + component classes).
+- **Fonts:** Instrument Serif (display), Inter (UI, 13 px base), JetBrains Mono (data).
+- **Accent:** `oklch(0.55 0.08 253)` — muted lilac. Hue is `--accent-h = 253`.
+- **Density:** compact (`--pad: 14px`, `--pad-sm: 8px`, `--row: 26px`).
+- **Layout:** `.app` grid — `280px | 1fr | 300px` columns × `44px | 1fr` rows.
+- When building new UI, use classes from `design.css` (`.btn`, `.btn.accent`, `.panel-section`, `.panel-title em`, `.field`, `.kv-row`, `.chip`, `.segmented`, `.modal`, `.toast`, etc.) rather than Tailwind utilities.
+
 ### State Management
-- **MapViewerGL.tsx owns all state** — layers, filters, symbology, DuckDB tables, modals
+- **MapViewerGL.tsx owns all state** — layers, filters, symbology, DuckDB tables, modals, `selectedLayerId`, `editTarget`
 - Child components are pure: receive props, fire callbacks
 - No state management library (no Redux/Zustand) — React useState + useCallback
+- **`selectedLayerId`** drives which layer the Symbology/Filter rail panels act on. Clicking a layer row or its style/filter icon updates both `selectedLayerId` and `editTarget`.
+- **`editTarget: 'style' | 'filter'`** — segmented toggle in the left rail decides which panel renders below the layer list.
 
 ### Data Flow
 ```
@@ -76,6 +105,8 @@ File upload → parse (CSV/GeoJSON/Shapefile/Parquet)
 - **URL hash state** — map position persisted in URL hash for shareable links
 - **Main canvas drag-and-drop** — files can be dropped anywhere on the map, not just the Add Data modal
 - **ErrorBoundary** — wraps MapViewerGL to prevent white-screen crashes
+- **Filter is a rail panel, not a modal** (v2.3) — opening filters swaps the left-rail panel via `editTarget='filter'`; there is no modal overlay anymore.
+- **DeckGL canvas sizing** — `.map-wrap` is a CSS-grid cell (no explicit size); the `#deckgl-overlay` canvas is force-sized to `100% × 100%` in `design.css` so deck.gl fills the grid cell correctly.
 
 ### Supported Data Formats
 | Format | Map layer? | DuckDB table? | Handler |

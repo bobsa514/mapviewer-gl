@@ -1,19 +1,27 @@
 /**
- * SQL Editor panel — a bottom-anchored split-pane UI for running DuckDB queries.
+ * SQL Editor — floating workspace overlay anchored to the bottom of the map.
  *
- * Left pane: SQL textarea with syntax help and registered table chips.
- * Right pane: results table or contextual help with example queries.
- * If query results include a geometry column, an "Add as Layer" button
- * lets the user visualize the output on the map.
+ * Layout (v2.3 redesign):
+ *   ┌──────────────────────────────────────────────┐
+ *   │ SQL workspace                   [Help] [×]   │ ← .sql-head
+ *   ├────────────┬─────────────────────────────────┤
+ *   │ Tables     │ textarea (SQL)                  │
+ *   │ Templates  │ toolbar (templates · ⌘↵ run)    │
+ *   │            │ results                         │
+ *   │            │ meta bar (rows · time · add)    │
+ *   └────────────┴─────────────────────────────────┘
  *
- * DuckDB-WASM is lazily initialized on first render; the editor shows
- * a loading spinner until the WASM module is ready.
+ * Each registered layer / DuckDB-only table becomes a clickable row that
+ * injects `SELECT * FROM <table> LIMIT 10` into the editor. Spatial query
+ * templates (preview, count, spatial join, buffer+intersect) are provided.
+ *
+ * DuckDB-WASM is lazily initialized on first render.
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { XMarkIcon } from '@heroicons/react/24/outline';
 import type { FeatureCollection } from 'geojson';
 import type { DuckDBOnlyTable } from '../types';
+import { CloseIcon, PlayIcon, DownloadIcon, PlusIcon, SparkIcon, SqlIcon } from './icons';
 
 interface SQLEditorProps {
   registeredTables: string[];
@@ -24,12 +32,37 @@ interface SQLEditorProps {
   onRemoveDuckDBOnlyTable: (tableName: string) => void;
 }
 
-export const SQLEditor: React.FC<SQLEditorProps> = ({ registeredTables, duckdbOnlyTables, onAddLayer, onDuckDBReady, onClose, onRemoveDuckDBOnlyTable }) => {
+interface Template {
+  name: string;
+  build: (a: string, b: string) => string;
+}
+
+const TEMPLATES: Template[] = [
+  { name: 'Preview rows', build: (t) => `SELECT * FROM ${t}\nLIMIT 10;` },
+  { name: 'Row count', build: (t) => `SELECT COUNT(*) AS n FROM ${t};` },
+  {
+    name: 'Spatial join',
+    build: (a, b) =>
+      `SELECT a.*, b.*\nFROM ${a} a, ${b} b\nWHERE ST_Within(a.geom, b.geom)\nLIMIT 100;`,
+  },
+  {
+    name: 'Buffer + intersect',
+    build: (a, b) =>
+      `SELECT a.*, b.*\nFROM ${a} a, ${b} b\nWHERE ST_Intersects(\n  ST_Buffer(a.geom, 0.01),\n  b.geom\n)\nLIMIT 100;`,
+  },
+];
+
+export const SQLEditor: React.FC<SQLEditorProps> = ({
+  registeredTables,
+  duckdbOnlyTables,
+  onAddLayer,
+  onDuckDBReady,
+  onClose,
+  onRemoveDuckDBOnlyTable,
+}) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isDuckDBReady, setIsDuckDBReady] = useState(false);
   const [sql, setSql] = useState('');
-  const [showHelp, setShowHelp] = useState(false);
-  const [leftWidthPercent, setLeftWidthPercent] = useState(60);
   const [result, setResult] = useState<{
     columns: string[];
     rows: any[][];
@@ -39,9 +72,7 @@ export const SQLEditor: React.FC<SQLEditorProps> = ({ registeredTables, duckdbOn
     executionTimeMs: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isDraggingRef = useRef(false);
+  const taRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (!isDuckDBReady) {
@@ -53,369 +84,312 @@ export const SQLEditor: React.FC<SQLEditorProps> = ({ registeredTables, duckdbOn
             setIsLoading(false);
             onDuckDBReady();
           })
-          .catch(err => {
-            setError(`Failed to load DuckDB: ${err.message}`);
+          .catch((err) => {
+            setError(`Failed to load DuckDB: ${err.message ?? String(err)}`);
             setIsLoading(false);
           });
       });
     }
   }, [isDuckDBReady, onDuckDBReady]);
 
-  // Divider drag handling
-  const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isDraggingRef.current = true;
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (!isDraggingRef.current || !containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const newPercent = ((e.clientX - rect.left) / rect.width) * 100;
-      setLeftWidthPercent(Math.min(80, Math.max(20, newPercent)));
-    };
-
-    const onMouseUp = () => {
-      isDraggingRef.current = false;
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  }, []);
-
   const runQuery = useCallback(async () => {
     if (!sql.trim()) return;
     setError(null);
     setResult(null);
     setIsLoading(true);
-
     try {
       const { executeQuery } = await import('../utils/duckdb');
       const queryResult = await executeQuery(sql);
       setResult(queryResult);
     } catch (err: any) {
-      setError(err.message || 'Query execution failed');
+      setError(err?.message ?? 'Query execution failed');
     } finally {
       setIsLoading(false);
     }
   }, [sql]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      runQuery();
-    }
-  }, [runQuery]);
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        runQuery();
+      }
+    },
+    [runQuery]
+  );
+
+  const insertForTable = (table: string) => {
+    setSql(`SELECT * FROM ${table} LIMIT 10;`);
+    setTimeout(() => taRef.current?.focus(), 30);
+  };
+
+  const insertTemplate = (tpl: Template) => {
+    const a = registeredTables[0] ?? 'table_a';
+    const b = registeredTables[1] ?? 'table_b';
+    setSql(tpl.build(a, b));
+    setTimeout(() => taRef.current?.focus(), 30);
+  };
 
   const handleAddAsLayer = useCallback(() => {
     if (result?.geojson) {
-      const name = `sql_result_${Date.now()}`;
-      onAddLayer(name, result.geojson);
+      onAddLayer(`sql_result_${Date.now()}`, result.geojson);
     }
   }, [result, onAddLayer]);
 
-  const insertExample = (example: string) => {
-    setSql(example);
-    setShowHelp(false);
-    textareaRef.current?.focus();
+  const exportCSV = () => {
+    if (!result) return;
+    const csvRows = [
+      result.columns.join(','),
+      ...result.rows.map((row) =>
+        row
+          .map((cell) => {
+            if (cell === null || cell === undefined) return '';
+            const str = String(cell);
+            return str.includes(',') || str.includes('"') || str.includes('\n')
+              ? `"${str.replace(/"/g, '""')}"`
+              : str;
+          })
+          .join(',')
+      ),
+    ];
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'query_results.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-[90] bg-white border-t border-gray-300 shadow-lg h-[40vh]">
-      {/* Header bar */}
-      <div className="flex items-center justify-between px-4 h-9 bg-gray-100 border-b border-gray-200 select-none">
-        <div className="flex items-center space-x-2">
-          <span className="text-sm font-medium text-gray-700">SQL Editor</span>
-          {isDuckDBReady && registeredTables.length > 0 && (
-            <span className="text-xs text-gray-400">
-              ({registeredTables.length} table{registeredTables.length !== 1 ? 's' : ''})
-            </span>
-          )}
+    <div className="sql-overlay" onClick={(e) => e.stopPropagation()}>
+      <div className="sql-head">
+        <div className="sql-head-left">
+          <SqlIcon size={16} />
+          <h3>SQL <em>workspace</em></h3>
+          <span className="chip">DuckDB · spatial</span>
         </div>
-        <div className="flex items-center space-x-3">
-          {result && (
-            <span className="text-xs text-gray-500">
-              {result.rowCount} rows in {result.executionTimeMs.toFixed(0)}ms
-            </span>
-          )}
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors" aria-label="Close SQL editor">
-            <XMarkIcon className="h-4 w-4" />
+        <div className="row" style={{ gap: 6 }}>
+          <button className="icon-btn" onClick={onClose} aria-label="Close SQL editor">
+            <CloseIcon size={14} />
           </button>
         </div>
       </div>
 
-      <div ref={containerRef} className="flex h-[calc(100%-36px)]">
-        {/* Left: SQL input */}
-        <div style={{ width: `${leftWidthPercent}%` }} className="flex flex-col">
-          {isLoading && !isDuckDBReady ? (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center">
-                <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                <p className="text-sm text-gray-500">Loading DuckDB...</p>
-              </div>
+      <div className="sql-body">
+        <div className="sql-tables">
+          <div className="sql-tables-title">Tables in scope</div>
+          {registeredTables.length === 0 && (
+            <div className="muted" style={{ fontSize: 11 }}>
+              No tables — add data layers first.
             </div>
-          ) : (
-            <>
-              <textarea
-                ref={textareaRef}
-                value={sql}
-                onChange={(e) => setSql(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={registeredTables.length > 0
-                  ? `Try: SELECT * FROM ${registeredTables[0]} LIMIT 10`
-                  : 'Add data layers first, then query them here...'}
-                className="flex-1 p-3 font-mono text-sm resize-none outline-none bg-gray-50"
-                spellCheck={false}
-                autoFocus
-              />
-              <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-200">
-                <div className="flex items-center space-x-2">
+          )}
+          {registeredTables.map((t) => {
+            const dbOnly = duckdbOnlyTables.find((d) => d.tableName === t);
+            return (
+              <div
+                key={t}
+                className="sql-table-row"
+                onClick={() => insertForTable(t)}
+                title={dbOnly ? `${t} · ${dbOnly.sourceType}` : t}
+              >
+                <span
+                  className="dot"
+                  style={{ background: dbOnly ? 'var(--ink-4)' : 'var(--accent)' }}
+                />
+                <span>{t}</span>
+                {dbOnly && (
                   <button
-                    onClick={runQuery}
-                    disabled={isLoading || !sql.trim()}
-                    className="px-3 py-1 text-sm font-medium text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="icon-btn"
+                    title="Remove table"
+                    aria-label="Remove SQL-only table"
+                    style={{ marginLeft: 'auto' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemoveDuckDBOnlyTable(t);
+                    }}
                   >
-                    {isLoading ? 'Running...' : 'Run'}
+                    <CloseIcon size={10} />
                   </button>
-                  {result?.hasGeometry && (
-                    <button
-                      onClick={handleAddAsLayer}
-                      className="px-3 py-1 text-sm font-medium text-blue-600 bg-blue-50 rounded hover:bg-blue-100"
-                    >
-                      Add as Layer
-                    </button>
-                  )}
-                  {result && (
-                    <button
-                      onClick={() => {
-                        if (!result) return;
-                        const csvRows = [
-                          result.columns.join(','),
-                          ...result.rows.map(row =>
-                            row.map(cell => {
-                              if (cell === null || cell === undefined) return '';
-                              const str = String(cell);
-                              return str.includes(',') || str.includes('"') || str.includes('\n')
-                                ? `"${str.replace(/"/g, '""')}"` : str;
-                            }).join(',')
-                          )
-                        ];
-                        const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = 'query_results.csv';
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                      }}
-                      className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded hover:bg-gray-200 transition-colors"
-                      aria-label="Export results as CSV"
-                    >
-                      Export CSV
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setShowHelp(!showHelp)}
-                    className={`px-2 py-1 text-xs rounded transition-colors ${showHelp ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}
-                    title="Help & examples"
-                    aria-label="Help and examples"
-                  >
-                    ?
-                  </button>
-                </div>
-                {registeredTables.length > 0 && (
-                  <div className="flex items-center gap-1.5 flex-wrap justify-end max-w-[50%]">
-                    {registeredTables.map(t => {
-                      const dbOnly = duckdbOnlyTables.find(d => d.tableName === t);
-                      return (
-                        <button
-                          key={t}
-                          onClick={() => insertExample(`SELECT * FROM ${t} LIMIT 10`)}
-                          className={`text-xs px-1.5 py-0.5 rounded truncate max-w-[140px] ${
-                            dbOnly
-                              ? 'bg-purple-50 text-purple-600 hover:bg-purple-100 hover:text-purple-700'
-                              : 'bg-gray-100 text-blue-600 hover:bg-blue-50 hover:text-blue-700'
-                          }`}
-                          title={dbOnly ? `${t} (${dbOnly.sourceType} table)` : t}
-                        >
-                          {dbOnly && <span className="font-semibold mr-0.5">DB</span>}
-                          {t}
-                        </button>
-                      );
-                    })}
-                  </div>
                 )}
               </div>
-            </>
-          )}
+            );
+          })}
+
+          <div className="sql-tables-title" style={{ marginTop: 16 }}>
+            Templates
+          </div>
+          {TEMPLATES.map((t) => (
+            <div key={t.name} className="sql-table-row" onClick={() => insertTemplate(t)}>
+              <SparkIcon size={11} />
+              <span>{t.name}</span>
+            </div>
+          ))}
         </div>
 
-        {/* Resizable divider */}
-        <div
-          className="w-1.5 bg-gray-200 hover:bg-blue-400 cursor-col-resize flex-shrink-0 transition-colors"
-          onMouseDown={handleDividerMouseDown}
-        />
-
-        {/* Right: Results or Help */}
-        <div style={{ width: `${100 - leftWidthPercent}%` }} className="flex flex-col overflow-hidden">
-          {showHelp ? (
-            <div className="flex-1 overflow-auto p-4 text-sm text-gray-600 space-y-4 text-left">
-              <div>
-                <h3 className="font-semibold text-gray-800 mb-1">How it works</h3>
-                <p>Each layer you add becomes a SQL table. The table name is derived from the file name (lowercase, special characters replaced with underscores).</p>
-              </div>
-
-              {registeredTables.length > 0 && (
-                <div>
-                  <h3 className="font-semibold text-gray-800 mb-1">Your tables</h3>
-                  <div className="space-y-1">
-                    {registeredTables.map(t => {
-                      const dbOnly = duckdbOnlyTables.find(d => d.tableName === t);
-                      return (
-                        <div key={t} className="flex items-center justify-between bg-gray-50 px-2 py-1 rounded">
-                          <div className="flex items-center gap-1.5">
-                            <code className={`text-xs font-mono ${dbOnly ? 'text-purple-600' : 'text-blue-600'}`}>{t}</code>
-                            {dbOnly && (
-                              <span className="text-[10px] px-1 py-0.5 bg-purple-100 text-purple-600 rounded font-medium">
-                                {dbOnly.sourceType === 'csv' ? 'CSV table' : 'Parquet table'}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => insertExample(`SELECT * FROM ${t} LIMIT 10`)}
-                              className="text-xs text-blue-500 hover:underline"
-                            >
-                              query
-                            </button>
-                            {dbOnly && (
-                              <button
-                                onClick={() => onRemoveDuckDBOnlyTable(t)}
-                                className="text-xs text-red-400 hover:text-red-600"
-                                title="Remove table"
-                              >
-                                remove
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <h3 className="font-semibold text-gray-800 mb-1">Example queries</h3>
-                <div className="space-y-2">
-                  {registeredTables.length > 0 && (
-                    <>
-                      <ExampleQuery
-                        label="Preview data"
-                        sql={`SELECT * FROM ${registeredTables[0]} LIMIT 10`}
-                        onInsert={insertExample}
-                      />
-                      <ExampleQuery
-                        label="Count rows"
-                        sql={`SELECT COUNT(*) as total FROM ${registeredTables[0]}`}
-                        onInsert={insertExample}
-                      />
-                    </>
-                  )}
-                  {registeredTables.length >= 2 && (
-                    <ExampleQuery
-                      label="Join two layers"
-                      sql={`SELECT a.*, b.*\nFROM ${registeredTables[0]} a\nJOIN ${registeredTables[1]} b\n  ON a.geom = b.geom\nLIMIT 10`}
-                      onInsert={insertExample}
-                    />
-                  )}
-                  <ExampleQuery
-                    label="Spatial join (points in polygons)"
-                    sql={`SELECT a.*, b.*\nFROM ${registeredTables[0] || 'table_name'} a, ${registeredTables[1] || 'table_name_2'} b\nWHERE ST_Within(a.geom, b.geom)`}
-                    onInsert={insertExample}
-                  />
-                  <ExampleQuery
-                    label="Buffer & intersect"
-                    sql={`SELECT a.*, b.*\nFROM ${registeredTables[0] || 'table_name'} a, ${registeredTables[1] || 'table_name_2'} b\nWHERE ST_Intersects(\n  ST_Buffer(a.geom, 0.01),\n  b.geom\n)`}
-                    onInsert={insertExample}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-gray-800 mb-1">Add results as a layer</h3>
-                <p>If your query returns a <code className="text-xs bg-gray-100 px-1 rounded">geom</code> column, an "Add as Layer" button appears to visualize the results on the map.</p>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-gray-800 mb-1">Keyboard shortcut</h3>
-                <p><kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Ctrl</kbd> + <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Enter</kbd> to run query</p>
-              </div>
+        <div className="sql-main">
+          <textarea
+            ref={taRef}
+            className="sql-editor"
+            value={sql}
+            onChange={(e) => setSql(e.target.value)}
+            onKeyDown={handleKeyDown}
+            spellCheck={false}
+            placeholder={
+              registeredTables.length > 0
+                ? `-- Every layer is a SQL table. Try Cmd/Ctrl + Enter.\nSELECT * FROM ${registeredTables[0]} LIMIT 10;`
+                : '-- Add data layers first, then query them here.'
+            }
+            aria-label="SQL query input"
+          />
+          <div className="sql-toolbar">
+            <div className="sql-templates">
+              {TEMPLATES.slice(0, 3).map((t) => (
+                <button key={t.name} className="sql-tpl" onClick={() => insertTemplate(t)}>
+                  {t.name}
+                </button>
+              ))}
             </div>
-          ) : (
-            <>
-              {error && (
-                <div className="p-3 bg-red-50 border-b border-red-200 text-sm text-red-700 text-left">
-                  {error}
+            <div className="sql-run">
+              <span className="muted">
+                <kbd
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    background: 'var(--bg-raised)',
+                    border: '1px solid var(--line)',
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                    fontSize: 10.5,
+                  }}
+                >
+                  ⌘↵
+                </kbd>{' '}
+                to run
+              </span>
+              <button
+                className="btn sm accent"
+                onClick={runQuery}
+                disabled={isLoading || !sql.trim()}
+              >
+                <PlayIcon size={10} /> {isLoading && isDuckDBReady ? 'Running…' : 'Run query'}
+              </button>
+            </div>
+          </div>
+
+          <div className="sql-results">
+            {isLoading && !isDuckDBReady && (
+              <div style={{ padding: '32px 20px', color: 'var(--ink-3)', textAlign: 'center', fontSize: 12 }}>
+                Loading DuckDB…
+              </div>
+            )}
+            {error && (
+              <div
+                style={{
+                  padding: '12px 14px',
+                  color: 'oklch(0.45 0.15 28)',
+                  fontSize: 12,
+                  background: 'oklch(0.97 0.02 28)',
+                  borderBottom: '1px solid oklch(0.9 0.05 28)',
+                }}
+                role="alert"
+              >
+                {error}
+              </div>
+            )}
+            {!result && !isLoading && !error && (
+              <div style={{ padding: '32px 20px', color: 'var(--ink-3)', textAlign: 'center', fontSize: 12 }}>
+                <div
+                  style={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: 22,
+                    color: 'var(--ink-2)',
+                    fontStyle: 'italic',
+                    marginBottom: 6,
+                  }}
+                >
+                  No results yet
                 </div>
+                Press{' '}
+                <kbd
+                  className="mono"
+                  style={{
+                    background: 'var(--bg-raised)',
+                    border: '1px solid var(--line)',
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                  }}
+                >
+                  ⌘↵
+                </kbd>{' '}
+                to execute the query above.
+              </div>
+            )}
+            {result && (
+              <table>
+                <thead>
+                  <tr>
+                    {result.columns.map((c) => (
+                      <th key={c}>{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.rows.slice(0, 1000).map((row, i) => (
+                    <tr key={i}>
+                      {row.map((v, j) => {
+                        const isNull = v === null || v === undefined;
+                        const cls = isNull ? 'null' : typeof v === 'number' ? 'num' : '';
+                        // title attr gives hover-to-see-full-value for long
+                        // cells (JSON, WKT, URLs) — the cell itself has no
+                        // max-width so copy/paste and horizontal scroll work.
+                        const full = isNull ? 'null' : String(v);
+                        return (
+                        <td key={j} className={cls} title={full}>
+                          {isNull
+                            ? 'null'
+                            : typeof v === 'boolean'
+                            ? String(v)
+                            : typeof v === 'number'
+                            ? v.toLocaleString()
+                            : String(v)}
+                        </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {result && (
+            <div className="sql-meta">
+              <span className="stat">
+                <span className="muted">rows</span> {result.rowCount.toLocaleString()}
+              </span>
+              <span className="stat">
+                <span className="muted">time</span> {result.executionTimeMs.toFixed(0)}ms
+              </span>
+              {result.hasGeometry && (
+                <span className="chip accent">
+                  <span className="badge-dot" /> geometry column detected
+                </span>
               )}
-              {result && (
-                <div className="flex-1 overflow-auto">
-                  <table className="min-w-full text-xs">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        {result.columns.map((col, i) => (
-                          <th key={i} className="px-3 py-2 text-left font-medium text-gray-500 border-b border-gray-200">
-                            {col}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.rows.slice(0, 1000).map((row, i) => (
-                        <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                          {row.map((cell, j) => (
-                            <td key={j} className="px-3 py-1.5 text-gray-600 border-b border-gray-100 max-w-[200px] truncate text-left">
-                              {cell === null ? <span className="text-gray-300">NULL</span> : String(cell)}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+              <span className="space" />
+              <button className="btn sm" onClick={exportCSV}>
+                <DownloadIcon size={12} /> Export CSV
+              </button>
+              {result.hasGeometry && result.geojson && (
+                <button className="btn sm accent" onClick={handleAddAsLayer}>
+                  <PlusIcon size={12} /> Add as map layer
+                </button>
               )}
-              {!result && !error && (
-                <div className="flex-1 flex flex-col items-start justify-center text-sm text-gray-400 p-4 text-left">
-                  {registeredTables.length > 0 ? (
-                    <>
-                      <p>Run a query to see results</p>
-                      <p className="mt-2 text-xs">Click <span className="text-blue-500">?</span> for help & examples</p>
-                    </>
-                  ) : (
-                    <>
-                      <p>No tables available yet</p>
-                      <p className="mt-1 text-xs">Add data layers to the map first &mdash; each layer becomes a queryable SQL table</p>
-                    </>
-                  )}
-                </div>
-              )}
-            </>
+            </div>
           )}
         </div>
       </div>
     </div>
   );
 };
-
-const ExampleQuery: React.FC<{ label: string; sql: string; onInsert: (sql: string) => void }> = ({ label, sql, onInsert }) => (
-  <div className="bg-gray-50 rounded p-2 text-left">
-    <div className="flex items-center justify-between mb-1">
-      <span className="text-xs font-medium text-gray-700">{label}</span>
-      <button onClick={() => onInsert(sql)} className="text-xs text-blue-500 hover:underline">use</button>
-    </div>
-    <pre className="text-xs font-mono text-gray-500 whitespace-pre-wrap">{sql}</pre>
-  </div>
-);

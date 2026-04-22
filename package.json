@@ -1,12 +1,13 @@
 {
   "name": "mapviewer-gl",
   "private": true,
-  "version": "2.1.0",
+  "version": "2.3.0",
   "type": "module",
   "homepage": "https://mapviewer-gl.vercel.app",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit",
     "lint": "eslint . --max-warnings 5",
     "test": "vitest run",
     "preview": "vite preview"
