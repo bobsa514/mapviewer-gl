@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.1] - 2026-06-04
+
+### Fixed
+- **Text filter not working** — `=` text comparison was case-sensitive exact match with no autocomplete, meaning typed values rarely matched actual data. Now uses autocomplete with suggestion dropdown from column's unique values, and text `=` is case-insensitive.
+- **Text filter missing autocomplete** — restored the multi-select suggestion behavior that FilterModal had before the v2.3 redesign. When `=` is selected for a text column, the user can search and pick values from a suggestion dropdown. Multiple picks create OR semantics (exact match).
+- **Config import filter reconstruction** — `applyConfig` now uses `item?.properties?.[col] ?? item?.[col]` fallback pattern (matching `buildFilterFn`), fixing imported filters for H3 and other edge case data shapes. Text `=` comparisons are now case-insensitive on import too.
+- **FilterInfo type** — Added optional `match: 'exact' | 'substring'` field to `multiple` value type, allowing clean separation between autocomplete exact-match and `contains` substring-match without breaking backward compatibility with older saved configs.
+
+### Changed
+- Text `=` operator is now **case-insensitive** for both direct comparison and autocomplete multi-select (was case-sensitive before, causing confusing "filter doesn't work" experience)
+
+### Added
+- **Autocomplete suggestion dropdown** for text `=` filter operator — press ArrowDown/ArrowUp to navigate, Enter to select, Escape to close
+- Selected values shown as **removable chips** before applying the filter
+- **36 new unit tests** for filter logic (`src/utils/__tests__/filter.test.ts`): extractDataItems, buildColumns, buildFilterFn for all operator types, edge cases, backward compatibility
+- Total test count: **57 → 93**
+
 ## [2.3.0] - 2026-04-20
 
 Visual redesign pass — new editorial design system, topbar, rail-based panels. All functional features (DuckDB-WASM, deck.gl, file parsers, filter semantics, config I/O, URL-hash sharing) are preserved.

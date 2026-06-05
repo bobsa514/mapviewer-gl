@@ -19,7 +19,7 @@ export interface FilterInfo {
   value:
     | { type: 'range'; min: number; max: number }
     | { type: 'comparison'; operator: ComparisonOperator; value: number | string }
-    | { type: 'multiple'; values: string[] };
+    | { type: 'multiple'; values: string[]; match?: 'exact' | 'substring' };
 }
 
 /** Available sequential color scale names (ColorBrewer-inspired). */
