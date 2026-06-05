@@ -6,17 +6,19 @@ MapViewer-GL is a **client-side** geospatial data viewer built with React, deck.
 **Live demo:** https://mapviewer-gl.vercel.app
 **Deployed via:** Vercel (auto-deploy on push to `main`). CI checks in `.github/workflows/ci.yml`.
 
-## UI/UX Source of Truth
+## Documentation Index
 
-The shipped UI is being replaced. When making ANY UI/UX decision on this repo, consult these first:
-- **`UX_SPEC.md`** (repo root) — functional spec: what the app does, user stories, screens. No design decisions.
-- **`docs/design/`** — Claude Design handoff bundle (visual source of truth). Key files:
-  - `docs/design/project/styles.css` — the design system in CSS (OKLCH, typography)
-  - `docs/design/project/MapViewer-GL.html` + `project/*.jsx` — interactive prototype
-  - `docs/design/chats/chat1.md` — designer/user conversation with intent + iteration history
-  - `docs/design/IMPLEMENTATION_PLAN.md` — step-by-step checklist for porting the design onto the real codebase (planned 2026-04-17, not yet executed)
+| Document | Purpose |
+|---|---|
+| `UX_SPEC.md` (repo root) | Functional spec: user stories, screens, edge cases |
+| `docs/PRD.md` | Product requirements: feature inventory, personas, known issues |
+| `docs/ARCHITECTURE.md` | Code architecture: tech stack, state management, data flow, filter design |
+| `docs/TEST_PLAN.md` | Test inventory: coverage gaps, recommended test additions |
+| `docs/design/` | Visual source of truth (OKLCH design system, prototypes) |
+| `docs/design/IMPLEMENTATION_PLAN.md` | v2.3 redesign execution checklist (COMPLETED — design ported to real codebase) |
+| `CHANGELOG.md` | Release history |
 
-Do NOT defer to the current shipped UI when designing new things — it's being replaced per the plan above.
+When making ANY UI/UX decision, consult `UX_SPEC.md` (functional) and `docs/design/` (visual) first. Do NOT defer to the current shipped UI for visual decisions — the v2.3 redesign in `design.css` is the source of truth.
 
 ## Build & Dev Commands
 ```bash
@@ -119,11 +121,24 @@ File upload → parse (CSV/GeoJSON/Shapefile/Parquet)
 | GeoParquet | Yes | Yes | `handleParquetFile` → `extractGeoParquetAsGeoJSON` |
 | Plain Parquet | No | Yes (DuckDB-only) | `handleParquetFile` → no geom detected |
 
-## Known Issues (from CHANGELOG v2.2.0)
+## Known Issues
+
+### Bugs (v2.3.0)
+- **FilterPanel performance:** `buildColumns` iterates ALL data items × ALL columns (O(n×c)) on every render. For 100k features with 10 columns, this blocks the UI for seconds. Should sample data or offload to DuckDB.
+- **Basemap OSM active-state:** `BasemapSelector` compares `mapStyle === style` by object reference. OSM basemap (an object) breaks active-state highlighting after config import (deserialized copy !== static reference).
+- **Symbology columns ignore filters:** `getNumericColumns` in SymbologyPanel doesn't account for active filters — shows all numeric columns even when data is filtered.
+- **GeoJSON color-by-column:** only handles `typeof value === 'number'` — string-numeric properties (e.g. `"100"`) won't be color-mapped, while point/H3 layers DO parse strings.
+- **Size-by-column:** data model supports it but no UI is exposed in SymbologyPanel.
+- **Legend:** only shows the first visible layer's color legend (no size legend, no stacking).
 - H3 column detection only validates the first preview row
 - BigInt values silently converted to Number (precision loss > 2^53)
+
+### Technical debt
+- `papaparse` is still statically imported in MapViewerGL.tsx
 - maplibre-gl and vendor-deckgl chunks exceed 800 KB (expected for these libraries)
-- `papaparse` is still statically imported in MapViewerGL.tsx (used for CSV parsing); `sanitizeTableName` extracted to `tableName.ts` to restore DuckDB lazy-load
+- AddDataModal, CSVPreviewModal, GeoJSONPreviewModal remain on Tailwind styling (phase-2 re-skin)
+- ZERO component-level tests — only utility functions tested (57 tests in `src/utils/__tests__/`)
+- Filter function wrapping for H3 layers is convoluted (double-wrapper that works by accident)
 
 ## Common Tasks
 

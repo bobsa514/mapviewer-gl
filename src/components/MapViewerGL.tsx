@@ -713,37 +713,39 @@ const MapViewerGL: React.FC = () => {
         if (layerConfig.filters && layerConfig.filters.length > 0) {
           newFilters[importedIds[index]] = layerConfig.filters.map((filterInfo) => ({
             fn: (item: any) => {
-              const value = item.properties?.[filterInfo.column];
+              const raw = item?.properties?.[filterInfo.column] ?? item?.[filterInfo.column];
               if (filterInfo.type === 'numeric') {
-                const numValue = parseFloat(value);
+                const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
+                if (isNaN(n)) return false;
                 if (filterInfo.value.type === 'range') {
-                  return numValue >= filterInfo.value.min && numValue <= filterInfo.value.max;
+                  return n >= filterInfo.value.min && n <= filterInfo.value.max;
                 } else if (filterInfo.value.type === 'comparison') {
-                  const compValue = parseFloat(String(filterInfo.value.value));
+                  const compValue = Number(filterInfo.value.value);
                   switch (filterInfo.value.operator) {
-                    case '<': return numValue < compValue;
-                    case '<=': return numValue <= compValue;
-                    case '>': return numValue > compValue;
-                    case '>=': return numValue >= compValue;
-                    case '=': return numValue === compValue;
+                    case '<': return n < compValue;
+                    case '<=': return n <= compValue;
+                    case '>': return n > compValue;
+                    case '>=': return n >= compValue;
+                    case '=': return n === compValue;
                     default: return true;
                   }
                 }
               } else if (filterInfo.type === 'text') {
-                const raw = String(value ?? '');
                 if (filterInfo.value.type === 'multiple') {
-                  // `contains` — case-insensitive substring, OR over values.
-                  const lower = raw.toLowerCase();
+                  if (filterInfo.value.match === 'exact') {
+                    const s = String(raw ?? '').toLowerCase();
+                    return filterInfo.value.values.some((v) => s === v.toLowerCase());
+                  }
+                  const lower = String(raw ?? '').toLowerCase();
                   return filterInfo.value.values.some((v) => lower.includes(v.toLowerCase()));
                 } else if (filterInfo.value.type === 'comparison') {
-                  // Comparison preserves case — mirrors the old FilterModal.
                   const compValue = String(filterInfo.value.value);
                   switch (filterInfo.value.operator) {
-                    case '=': return raw === compValue;
-                    case '<': return raw < compValue;
-                    case '<=': return raw <= compValue;
-                    case '>': return raw > compValue;
-                    case '>=': return raw >= compValue;
+                    case '=': return String(raw ?? '').toLowerCase() === compValue.toLowerCase();
+                    case '<': return String(raw ?? '') < compValue;
+                    case '<=': return String(raw ?? '') <= compValue;
+                    case '>': return String(raw ?? '') > compValue;
+                    case '>=': return String(raw ?? '') >= compValue;
                     default: return true;
                   }
                 }
